@@ -2,6 +2,7 @@
 #define SOCKET_H
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netdb.h>
 
 class Socket
 {
@@ -36,10 +37,40 @@ public:
             close(sockfd);
         }
     }
-bool isValid() const
+    bool isValid() const
     {
         return sockfd != -1;
     }
+    int Connect(const char *address, const char *service)
+    {
+        struct addrinfo hints{
+            .ai_family = AF_UNSPEC,
+            .ai_socktype = SOCK_STREAM};
+        struct addrinfo *res;
+        int connected = getaddrinfo(address, service, &hints, &res);
+        if (connected != 0)
+        {
+            return connected; // getaddrinfo failed
+        }
+        struct addrinfo *p;
+        for (p = res; p != nullptr; p = p->ai_next)
+        {
+            sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+            if (connect(sockfd, p->ai_addr, p->ai_addrlen) == 0)
+            {
+                break; // Successfully connected
+            }
+            close(sockfd);
+        }
+        freeaddrinfo(res);
+        if (p == nullptr)
+        {
+            return -1; // Connection failed
+        }
+        
+        return 0; // Success
+    }
+
 private:
     int sockfd = -1;
 };
