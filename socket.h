@@ -4,6 +4,9 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <string>
+#include <cstring>
+#include <cerrno>
+#include <openssl/ssl.h>
 
 class Socket
 {
@@ -11,6 +14,13 @@ public:
     Socket()
     {
         sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (ssl_ctx == nullptr)
+        {
+            SSL_library_init();
+            OpenSSL_add_all_algorithms();
+            SSL_load_error_strings();
+            ssl_ctx = SSL_CTX_new(TLS_client_method());
+        }
     }
     Socket(const Socket &) = delete;
     Socket(Socket &&other) noexcept : sockfd(other.sockfd)
@@ -33,6 +43,10 @@ public:
     }
     ~Socket()
     {
+        if (ssl != nullptr)
+        {
+            SSL_free(ssl);
+        }
         if (sockfd != -1)
         {
             close(sockfd);
@@ -51,15 +65,24 @@ public:
         int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
         {
+            std::cerr << "Getaddrinfo error: " << gai_strerror(connected) << std::endl;
             return connected; // getaddrinfo failed
         }
         struct addrinfo *p;
         for (p = res; p != nullptr; p = p->ai_next)
         {
             sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-            if (connect(sockfd, p->ai_addr, p->ai_addrlen) == 0)
+            int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
+            if (success == 0)
             {
+                ssl = SSL_new(ssl_ctx);
+                SSL_set_fd(ssl, sockfd);
+                SSL_connect(ssl);
                 break; // Successfully connected
+            }
+            if (success == -1)
+            {
+                std::cerr << "Connect error: " << strerror(errno) << std::endl;
             }
             close(sockfd);
         }
@@ -91,6 +114,8 @@ public:
 
 private:
     int sockfd = -1;
+    static SSL_CTX *ssl_ctx;
+    SSL *ssl;
 };
 
 #endif // SOCKET_H
