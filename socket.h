@@ -7,7 +7,7 @@
 #include <cstring>
 #include <cerrno>
 #include <openssl/ssl.h>
-
+#include <iostream>
 class Socket
 {
 public:
@@ -75,9 +75,12 @@ public:
             int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
             if (success == 0)
             {
-                ssl = SSL_new(ssl_ctx);
-                SSL_set_fd(ssl, sockfd);
-                SSL_connect(ssl);
+                if (service == "443")
+                {
+                    ssl = SSL_new(ssl_ctx);
+                    SSL_set_fd(ssl, sockfd);
+                    SSL_connect(ssl);
+                }
                 break; // Successfully connected
             }
             if (success == -1)
@@ -111,10 +114,10 @@ public:
         }
         return "";
     }
-
+static SSL_CTX *ssl_ctx;
 private:
     int sockfd = -1;
-    static SSL_CTX *ssl_ctx;
+    
     SSL *ssl;
 };
 
