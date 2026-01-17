@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <string>
 
 class Socket
 {
@@ -41,13 +42,13 @@ public:
     {
         return sockfd != -1;
     }
-    int Connect(const char *address, const char *service)
+    int Connect(const std::string &address, const std::string &service)
     {
         struct addrinfo hints{
             .ai_family = AF_UNSPEC,
             .ai_socktype = SOCK_STREAM};
         struct addrinfo *res;
-        int connected = getaddrinfo(address, service, &hints, &res);
+        int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
         {
             return connected; // getaddrinfo failed
@@ -67,8 +68,25 @@ public:
         {
             return -1; // Connection failed
         }
-        
+
         return 0; // Success
+    }
+    ssize_t Send(const std::string &buf, int flags = 0)
+    {
+        ssize_t bytes_sent = send(sockfd, buf.c_str(), buf.length(), flags);
+        return bytes_sent;
+    }
+
+    std::string Receive(int flags = 0)
+    {
+        std::string buffer(4096, '\0');
+        ssize_t bytes_received = recv(sockfd, &buffer[0], buffer.size(), flags);
+        if (bytes_received > 0)
+        {
+            buffer.resize(bytes_received);
+            return buffer;
+        }
+        return "";
     }
 
 private:
