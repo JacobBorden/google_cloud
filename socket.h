@@ -23,21 +23,28 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl)
     {
         other.sockfd = -1;
+        other.ssl = nullptr;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
     {
         if (this != &other)
         {
+            if (ssl != nullptr)
+            {
+                SSL_free(ssl);
+            }
             if (sockfd != -1)
             {
                 close(sockfd);
             }
             sockfd = other.sockfd;
+            ssl = other.ssl;
             other.sockfd = -1;
+            other.ssl = nullptr;
         }
         return *this;
     }
@@ -118,7 +125,7 @@ static SSL_CTX *ssl_ctx;
 private:
     int sockfd = -1;
     
-    SSL *ssl;
+    SSL *ssl = nullptr;
 };
 
 #endif // SOCKET_H
