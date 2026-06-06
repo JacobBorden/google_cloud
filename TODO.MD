@@ -1,19 +1,19 @@
 # TODO
 
 ## Bugs
-1. **Uninitialized `ssl` pointer in `Socket` class:**
+1. ~~**Uninitialized `ssl` pointer in `Socket` class:**~~ (Completed)
    - The `ssl` member variable in `Socket` is not initialized to `nullptr` in the default constructor, leading to a conditional jump depending on uninitialized values in `~Socket()`.
    - **Fix:** Initialize `ssl` to `nullptr` in the constructor initializer list or in the class definition.
 
-2. **Move constructor does not transfer `ssl`:**
+2. ~~**Move constructor does not transfer `ssl`:**~~ (Completed)
    - The move constructor transfers `sockfd` but neglects `ssl`. This leaves the moved-from object with a potentially dangling `ssl` pointer (if it were initialized) and the moved-to object with a default (likely uninitialized) `ssl`.
    - **Fix:** Transfer the `ssl` pointer in the move constructor and move assignment operator, and set the moved-from object's `ssl` to `nullptr`.
 
-3. **Move assignment operator logic issues:**
+3. ~~**Move assignment operator logic issues:**~~ (Completed)
    - `sockfd` is correctly transferred and closed if already open, but `ssl` is ignored. If `this->ssl` is not null, it needs to be freed before taking ownership of the `other.ssl`.
    - **Fix:** Add `SSL_free(ssl)` if it exists, take `other.ssl`, and set `other.ssl = nullptr`.
 
-4. **Missing field initializers warning:**
+4. ~~**Missing field initializers warning:**~~ (Completed)
    - The `addrinfo hints` struct initialization in `Connect` does not initialize all fields, which can trigger compiler warnings (`-Wmissing-field-initializers`).
    - **Fix:** Add `, 0` or similar for remaining fields or zero out the structure first using `memset` or `{}` initialization correctly.
 
