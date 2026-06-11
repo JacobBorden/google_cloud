@@ -49,5 +49,6 @@ int main()
         }
     }
 
+    Socket::CleanupSSL();
     return 0;
 }
