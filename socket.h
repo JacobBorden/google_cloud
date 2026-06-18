@@ -23,21 +23,28 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl)
     {
         other.sockfd = -1;
+        other.ssl = nullptr;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
     {
         if (this != &other)
         {
+            if (ssl != nullptr)
+            {
+                SSL_free(ssl);
+            }
             if (sockfd != -1)
             {
                 close(sockfd);
             }
             sockfd = other.sockfd;
+            ssl = other.ssl;
             other.sockfd = -1;
+            other.ssl = nullptr;
         }
         return *this;
     }
@@ -52,20 +59,33 @@ public:
             close(sockfd);
         }
     }
+
+    static void CleanupSSL()
+    {
+        if (ssl_ctx != nullptr)
+        {
+            SSL_CTX_free(ssl_ctx);
+            ssl_ctx = nullptr;
+        }
+    }
     bool isValid() const
     {
         return sockfd != -1;
     }
     int Connect(const std::string &address, const std::string &service)
     {
-        struct addrinfo hints{
-            .ai_family = AF_UNSPEC,
-            .ai_socktype = SOCK_STREAM};
-        struct addrinfo *res;
+        struct addrinfo hints;
+        std::memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        struct addrinfo *res = nullptr;
         int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
         {
             std::cerr << "Getaddrinfo error: " << gai_strerror(connected) << std::endl;
+            if (res != nullptr) {
+                freeaddrinfo(res);
+            }
             return connected; // getaddrinfo failed
         }
         struct addrinfo *p;
@@ -118,7 +138,7 @@ static SSL_CTX *ssl_ctx;
 private:
     int sockfd = -1;
     
-    SSL *ssl;
+    SSL *ssl = nullptr;
 };
 
 #endif // SOCKET_H
