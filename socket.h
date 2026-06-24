@@ -11,7 +11,7 @@
 class Socket
 {
 public:
-    Socket()
+    Socket() : ssl(nullptr)
     {
         sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (ssl_ctx == nullptr)
@@ -23,9 +23,10 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl)
     {
         other.sockfd = -1;
+        other.ssl = nullptr;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
