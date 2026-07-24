@@ -23,15 +23,23 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl)
     {
         other.sockfd = -1;
+        other.ssl = nullptr;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
     {
         if (this != &other)
         {
+            if (ssl != nullptr)
+            {
+                SSL_free(ssl);
+            }
+            ssl = other.ssl;
+            other.ssl = nullptr;
+
             if (sockfd != -1)
             {
                 close(sockfd);
@@ -58,9 +66,10 @@ public:
     }
     int Connect(const std::string &address, const std::string &service)
     {
-        struct addrinfo hints{
-            .ai_family = AF_UNSPEC,
-            .ai_socktype = SOCK_STREAM};
+        struct addrinfo hints;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
         struct addrinfo *res;
         int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
@@ -118,7 +127,7 @@ static SSL_CTX *ssl_ctx;
 private:
     int sockfd = -1;
     
-    SSL *ssl;
+    SSL *ssl = nullptr;
 };
 
 #endif // SOCKET_H
