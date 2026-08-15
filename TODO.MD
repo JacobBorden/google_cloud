@@ -13,7 +13,7 @@
    - `sockfd` is correctly transferred and closed if already open, but `ssl` is ignored. If `this->ssl` is not null, it needs to be freed before taking ownership of the `other.ssl`.
    - **Fix:** Add `SSL_free(ssl)` if it exists, take `other.ssl`, and set `other.ssl = nullptr`.
 
-4. **Missing field initializers warning:**
+4. ~~**Missing field initializers warning:**~~ (Completed)
    - The `addrinfo hints` struct initialization in `Connect` does not initialize all fields, which can trigger compiler warnings (`-Wmissing-field-initializers`).
    - **Fix:** Add `, 0` or similar for remaining fields or zero out the structure first using `memset` or `{}` initialization correctly.
 
