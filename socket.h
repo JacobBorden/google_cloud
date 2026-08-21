@@ -118,7 +118,7 @@ static SSL_CTX *ssl_ctx;
 private:
     int sockfd = -1;
     
-    SSL *ssl;
+    SSL *ssl = nullptr;
 };
 
 #endif // SOCKET_H
