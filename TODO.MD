@@ -1,7 +1,7 @@
 # TODO
 
 ## Bugs
-1. **Uninitialized `ssl` pointer in `Socket` class:**
+1. ~~**Uninitialized `ssl` pointer in `Socket` class:**~~ (Complete)
    - The `ssl` member variable in `Socket` is not initialized to `nullptr` in the default constructor, leading to a conditional jump depending on uninitialized values in `~Socket()`.
    - **Fix:** Initialize `ssl` to `nullptr` in the constructor initializer list or in the class definition.
 
