@@ -2,8 +2,8 @@
 
 ## Bugs
 1. **Uninitialized `ssl` pointer in `Socket` class:**
-   - The `ssl` member variable in `Socket` is not initialized to `nullptr` in the default constructor, leading to a conditional jump depending on uninitialized values in `~Socket()`.
-   - **Fix:** Initialize `ssl` to `nullptr` in the constructor initializer list or in the class definition.
+   - [X] The `ssl` member variable in `Socket` is not initialized to `nullptr` in the default constructor, leading to a conditional jump depending on uninitialized values in `~Socket()`.
+   - [X] **Fix:** Initialize `ssl` to `nullptr` in the constructor initializer list or in the class definition.
 
 2. **Move constructor does not transfer `ssl`:**
    - The move constructor transfers `sockfd` but neglects `ssl`. This leaves the moved-from object with a potentially dangling `ssl` pointer (if it were initialized) and the moved-to object with a default (likely uninitialized) `ssl`.
