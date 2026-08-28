@@ -2,7 +2,7 @@
 
 ## Bugs
 1. **Uninitialized `ssl` pointer in `Socket` class:**
-   - The `ssl` member variable in `Socket` is not initialized to `nullptr` in the default constructor, leading to a conditional jump depending on uninitialized values in `~Socket()`.
+   - [x] The `ssl` member variable in `Socket` is not initialized to `nullptr` in the default constructor, leading to a conditional jump depending on uninitialized values in `~Socket()`.
    - **Fix:** Initialize `ssl` to `nullptr` in the constructor initializer list or in the class definition.
 
 2. **Move constructor does not transfer `ssl`:**
@@ -14,7 +14,7 @@
    - **Fix:** Add `SSL_free(ssl)` if it exists, take `other.ssl`, and set `other.ssl = nullptr`.
 
 4. **Missing field initializers warning:**
-   - The `addrinfo hints` struct initialization in `Connect` does not initialize all fields, which can trigger compiler warnings (`-Wmissing-field-initializers`).
+   - [x] The `addrinfo hints` struct initialization in `Connect` does not initialize all fields, which can trigger compiler warnings (`-Wmissing-field-initializers`).
    - **Fix:** Add `, 0` or similar for remaining fields or zero out the structure first using `memset` or `{}` initialization correctly.
 
 5. **Resource Leak on GetAddrInfo failure:**
