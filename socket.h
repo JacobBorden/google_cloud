@@ -11,7 +11,7 @@
 class Socket
 {
 public:
-    Socket()
+    Socket() : ssl(nullptr)
     {
         sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (ssl_ctx == nullptr)
@@ -23,21 +23,28 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl)
     {
         other.sockfd = -1;
+        other.ssl = nullptr;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
     {
         if (this != &other)
         {
+            if (ssl != nullptr)
+            {
+                SSL_free(ssl);
+            }
             if (sockfd != -1)
             {
                 close(sockfd);
             }
             sockfd = other.sockfd;
+            ssl = other.ssl;
             other.sockfd = -1;
+            other.ssl = nullptr;
         }
         return *this;
     }
@@ -58,9 +65,9 @@ public:
     }
     int Connect(const std::string &address, const std::string &service)
     {
-        struct addrinfo hints{
-            .ai_family = AF_UNSPEC,
-            .ai_socktype = SOCK_STREAM};
+        struct addrinfo hints{};
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
         struct addrinfo *res;
         int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
