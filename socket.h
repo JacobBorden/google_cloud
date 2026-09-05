@@ -58,9 +58,9 @@ public:
     }
     int Connect(const std::string &address, const std::string &service)
     {
-        struct addrinfo hints{
-            .ai_family = AF_UNSPEC,
-            .ai_socktype = SOCK_STREAM};
+        struct addrinfo hints{};
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
         struct addrinfo *res;
         int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
