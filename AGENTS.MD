@@ -21,3 +21,9 @@ When working on this project, please adhere to the following guidelines:
 
 ## Modifying Files
 - If you modify `socket.h` or `main.cpp`, ensure you update the `TODO.MD` and `DESIGN.MD` if architectural changes are made or bugs are fixed.
+
+## Project operations
+
+Read `PROJECT_MANAGEMENT.md` for the repository baseline, prioritized management work, and verification requirements. Preserve existing TODO.MD and DESIGN.MD as the technical backlog and architecture sources.
+
+Jacob authorized private Slack operations alerts on 2026-09-07. Send meaningful project changes, new blockers, recoveries, and required actions to #codex-ops (C0C01JWQ77Y). Suppress unchanged alerts, record confirmed delivery in task or automation memory, and retain the primary result if Slack is unavailable. Do not post credentials or raw private source material.

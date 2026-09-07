@@ -35,3 +35,7 @@
 4. **Missing features:**
    - No way to specify a timeout for `Connect`, `Send`, or `Receive`.
    - The `httprequest` struct is minimal and doesn't handle headers robustly.
+
+## Tested lifecycle recovery (2026-09-07)
+
+Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.

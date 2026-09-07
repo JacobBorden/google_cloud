@@ -65,10 +65,12 @@ public:
     }
     int Connect(const std::string &address, const std::string &service)
     {
+        if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
+        if (sockfd != -1) { close(sockfd); sockfd = -1; }
         struct addrinfo hints{};
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
-        struct addrinfo *res;
+        struct addrinfo *res = nullptr;
         int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
         {
@@ -79,6 +81,7 @@ public:
         for (p = res; p != nullptr; p = p->ai_next)
         {
             sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+            if (sockfd == -1) continue;
             int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
             if (success == 0)
             {
@@ -95,6 +98,7 @@ public:
                 std::cerr << "Connect error: " << strerror(errno) << std::endl;
             }
             close(sockfd);
+            sockfd = -1;
         }
         freeaddrinfo(res);
         if (p == nullptr)
