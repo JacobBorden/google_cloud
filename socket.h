@@ -23,21 +23,28 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl)
     {
         other.sockfd = -1;
+        other.ssl = nullptr;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
     {
         if (this != &other)
         {
+            if (ssl != nullptr)
+            {
+                SSL_free(ssl);
+            }
             if (sockfd != -1)
             {
                 close(sockfd);
             }
             sockfd = other.sockfd;
             other.sockfd = -1;
+            ssl = other.ssl;
+            other.ssl = nullptr;
         }
         return *this;
     }
@@ -58,10 +65,12 @@ public:
     }
     int Connect(const std::string &address, const std::string &service)
     {
-        struct addrinfo hints{
-            .ai_family = AF_UNSPEC,
-            .ai_socktype = SOCK_STREAM};
-        struct addrinfo *res;
+        if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
+        if (sockfd != -1) { close(sockfd); sockfd = -1; }
+        struct addrinfo hints{};
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        struct addrinfo *res = nullptr;
         int connected = getaddrinfo(address.c_str(), service.c_str(), &hints, &res);
         if (connected != 0)
         {
@@ -72,6 +81,7 @@ public:
         for (p = res; p != nullptr; p = p->ai_next)
         {
             sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+            if (sockfd == -1) continue;
             int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
             if (success == 0)
             {
@@ -88,6 +98,7 @@ public:
                 std::cerr << "Connect error: " << strerror(errno) << std::endl;
             }
             close(sockfd);
+            sockfd = -1;
         }
         freeaddrinfo(res);
         if (p == nullptr)
@@ -118,7 +129,7 @@ static SSL_CTX *ssl_ctx;
 private:
     int sockfd = -1;
     
-    SSL *ssl;
+    SSL *ssl = nullptr;
 };
 
 #endif // SOCKET_H

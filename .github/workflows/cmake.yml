@@ -1,0 +1,35 @@
+name: CMake
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cmake-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev valgrind
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test (zero tests is a failure)
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+      - name: Check socket memory lifecycle
+        if: matrix.build_type == 'Debug'
+        run: |
+          valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests lifecycle
+          valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests loopback

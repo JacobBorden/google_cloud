@@ -32,3 +32,7 @@ The project currently consists of a simple HTTP client implemented in C++:
 
 4. **Resource Management:**
    - Improve OpenSSL context management.
+
+## Tested lifecycle recovery (2026-09-07)
+
+Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.
