@@ -17,8 +17,8 @@
    - ~~The `addrinfo hints` struct initialization in `Connect` does not initialize all fields, which can trigger compiler warnings (`-Wmissing-field-initializers`).~~
    - ~~**Fix:** Add `, 0` or similar for remaining fields or zero out the structure first using `memset` or `{}` initialization correctly.~~
 
-5. **Resource Leak on GetAddrInfo failure:**
-   - If `getaddrinfo` fails, an error is printed, but if it somehow left allocated data in `res` (rare if it fails, but good practice), it's not freed. More importantly, memory allocated by `SSL_new` is correctly handled, but `ssl_ctx` is never cleaned up upon program exit (though it's a static pointer, so it's a one-time leak).
+5. ~~**Resource Leak on GetAddrInfo failure:**~~
+   - ~~If `getaddrinfo` fails, an error is printed, but if it somehow left allocated data in `res` (rare if it fails, but good practice), it's not freed. More importantly, memory allocated by `SSL_new` is correctly handled, but `ssl_ctx` is never cleaned up upon program exit (though it's a static pointer, so it's a one-time leak).~~
 
 ## Architectural / Design Issues
 1. **Hardcoded logic:**

@@ -4,7 +4,7 @@
 The project currently consists of a simple HTTP client implemented in C++:
 - **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets and integrates OpenSSL to handle both plain TCP and TLS connections. It handles `connect`, `send`, and `receive` operations. SSL initialization is tied directly to the class instantiation.
 - **`httprequest` Struct (`httprequest.h`):** A very basic structure representing an HTTP POST request. It provides a `ToString` method to serialize the request content.
-- **`main.cpp`:** Contains a demonstration of creating sockets, connecting to Google (which redirects), parsing the response for the `Location` header, and following the redirect to the HTTPS endpoint.
+- **`main.cpp`:** Contains a demonstration of creating sockets, connecting to Google (which redirects), parsing the response for the `Location` header, and following the redirect to the HTTPS endpoint. It releases the shared `Socket::ssl_ctx` after the socket objects have been destroyed.
 
 ## Class Responsibilities
 1. **`Socket`:**
@@ -31,7 +31,7 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Add configurable connection timeouts and read/write timeouts.
 
 4. **Resource Management:**
-   - Improve OpenSSL context management.
+   - `Socket` instances own their file descriptors and `SSL*` connections; `main` owns final cleanup of the shared `Socket::ssl_ctx` after all sockets are out of scope.
 
 ## Tested lifecycle recovery (2026-09-07)
 

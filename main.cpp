@@ -5,7 +5,7 @@
 SSL_CTX* Socket::ssl_ctx = nullptr;
 int main()
 {
-    
+    {
     std::vector<Socket> sockets;
     sockets.emplace_back(); // Create and add a Socket instance to the vector
         Socket anotherSocket = std::move(sockets.back()); // Move the last Socket to anotherSocket
@@ -47,6 +47,13 @@ int main()
             } while (redirectChunk.length() > 0);
             std::cout << "Received response from redirected location:\n" << redirectResponse << std::endl;
         }
+    }
+
+    }
+
+    if (Socket::ssl_ctx != nullptr) {
+        SSL_CTX_free(Socket::ssl_ctx);
+        Socket::ssl_ctx = nullptr;
     }
 
     return 0;
