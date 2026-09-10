@@ -48,6 +48,13 @@ public:
         }
         return *this;
     }
+    static void cleanup_ssl_ctx()
+    {
+        if (ssl_ctx != nullptr) {
+            SSL_CTX_free(ssl_ctx);
+            ssl_ctx = nullptr;
+        }
+    }
     ~Socket()
     {
         if (ssl != nullptr)
@@ -75,6 +82,7 @@ public:
         if (connected != 0)
         {
             std::cerr << "Getaddrinfo error: " << gai_strerror(connected) << std::endl;
+            if (res != nullptr) { freeaddrinfo(res); }
             return connected; // getaddrinfo failed
         }
         struct addrinfo *p;
