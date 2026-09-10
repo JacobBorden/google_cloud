@@ -49,5 +49,6 @@ int main()
         }
     }
 
+    Socket::cleanup_ssl_ctx();
     return 0;
 }
