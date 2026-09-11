@@ -92,7 +92,6 @@ int main(int argc, char **argv) {
     std::cerr << e.what() << '\n';
     result = 1;
   }
-  SSL_CTX_free(Socket::ssl_ctx);
-  Socket::ssl_ctx = nullptr;
+  Socket::CleanupSSL();
   return result;
 }
