@@ -75,6 +75,9 @@ public:
         if (connected != 0)
         {
             std::cerr << "Getaddrinfo error: " << gai_strerror(connected) << std::endl;
+            if (res != nullptr) {
+                freeaddrinfo(res);
+            }
             return connected; // getaddrinfo failed
         }
         struct addrinfo *p;
