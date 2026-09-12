@@ -49,5 +49,10 @@ int main()
         }
     }
 
+    if (Socket::ssl_ctx != nullptr) {
+        SSL_CTX_free(Socket::ssl_ctx);
+        Socket::ssl_ctx = nullptr;
+    }
+
     return 0;
 }
