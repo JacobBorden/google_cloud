@@ -75,6 +75,7 @@ public:
         if (connected != 0)
         {
             std::cerr << "Getaddrinfo error: " << gai_strerror(connected) << std::endl;
+            if (res != nullptr) freeaddrinfo(res);
             return connected; // getaddrinfo failed
         }
         struct addrinfo *p;
@@ -125,6 +126,16 @@ public:
         }
         return "";
     }
+
+    static void CleanupSSL()
+    {
+        if (ssl_ctx != nullptr)
+        {
+            SSL_CTX_free(ssl_ctx);
+            ssl_ctx = nullptr;
+        }
+    }
+
 static SSL_CTX *ssl_ctx;
 private:
     int sockfd = -1;
