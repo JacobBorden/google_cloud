@@ -63,7 +63,7 @@ public:
     {
         return sockfd != -1;
     }
-    int Connect(const std::string &address, const std::string &service, bool use_tls = false)
+    int Connect(const std::string &address, const std::string &service, bool use_tls)
     {
         if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
         if (sockfd != -1) { close(sockfd); sockfd = -1; }
@@ -120,6 +120,10 @@ public:
 
     std::string Receive(int flags = 0, size_t max_length = 4096)
     {
+        if (max_length == 0)
+        {
+            return "";
+        }
         std::string buffer(max_length, '\0');
         ssize_t bytes_received = recv(sockfd, &buffer[0], buffer.size(), flags);
         if (bytes_received > 0)

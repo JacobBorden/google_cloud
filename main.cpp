@@ -15,7 +15,7 @@ int main()
     }
    
     Socket googleSocket;
-    if (googleSocket.Connect("www.google.com", "80") == 0){
+    if (googleSocket.Connect("www.google.com", "80", false) == 0){
         std::string httpRequest = "GET / HTTP/1.1\r\nHost: www.google.com\r\nConnection: close\r\n\r\n";
         googleSocket.Send(httpRequest);
         std::string response;

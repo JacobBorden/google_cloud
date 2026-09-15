@@ -10,8 +10,8 @@ The project currently consists of a simple HTTP client implemented in C++:
 1. **`Socket`:**
    - Resource management for the underlying file descriptor (`sockfd`) and OpenSSL connection (`ssl`).
    - Resolution of hostnames to IP addresses using `getaddrinfo`.
-   - Establishing connections (both standard and SSL-wrapped).
-   - Reading and writing data to/from the socket.
+   - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
+   - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
 
 2. **`httprequest`:**
    - Storing content type, length, and body.
