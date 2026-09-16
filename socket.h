@@ -63,7 +63,7 @@ public:
     {
         return sockfd != -1;
     }
-    int Connect(const std::string &address, const std::string &service)
+    int Connect(const std::string &address, const std::string &service, bool use_ssl = false)
     {
         if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
         if (sockfd != -1) { close(sockfd); sockfd = -1; }
@@ -89,7 +89,7 @@ public:
             int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
             if (success == 0)
             {
-                if (service == "443")
+                if (use_ssl)
                 {
                     ssl = SSL_new(ssl_ctx);
                     SSL_set_fd(ssl, sockfd);
@@ -118,9 +118,9 @@ public:
         return bytes_sent;
     }
 
-    std::string Receive(int flags = 0)
+    std::string Receive(int flags = 0, size_t max_length = 4096)
     {
-        std::string buffer(4096, '\0');
+        std::string buffer(max_length, '\0');
         ssize_t bytes_received = recv(sockfd, &buffer[0], buffer.size(), flags);
         if (bytes_received > 0)
         {
