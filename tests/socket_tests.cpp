@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
                           &length) == 0);
         Socket client;
         Check(client.Connect("127.0.0.1",
-                             std::to_string(ntohs(address.sin_port))) == 0);
+                             std::to_string(ntohs(address.sin_port)), false) == 0);
         Fd peer{accept(listener.value, nullptr, nullptr)};
         Check(peer.value >= 0);
         Check(client.Send("ping") == 4);
@@ -83,6 +83,7 @@ int main(int argc, char **argv) {
         Check(std::string(buffer, 4) == "ping");
         Check(send(peer.value, "pong", 4, 0) == 4);
         Check(shutdown(peer.value, SHUT_WR) == 0);
+        Check(client.Receive(0, 0).empty());
         Check(client.Receive(MSG_WAITALL) == "pong");
       }
       Check(Fds() == count);

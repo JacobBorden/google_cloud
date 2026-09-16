@@ -15,7 +15,7 @@ int main()
     }
    
     Socket googleSocket;
-    if (googleSocket.Connect("www.google.com", "80") == 0){
+    if (googleSocket.Connect("www.google.com", "80", false) == 0){
         std::string httpRequest = "GET / HTTP/1.1\r\nHost: www.google.com\r\nConnection: close\r\n\r\n";
         googleSocket.Send(httpRequest);
         std::string response;
@@ -35,7 +35,7 @@ int main()
         size_t hostStart = location.find("://") + 3;
         size_t hostEnd = location.find("/", hostStart);
         std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
-        if (redirectSocket.Connect(locationHost, "443") == 0)
+        if (redirectSocket.Connect(locationHost, "443", true) == 0)
         {
             std::string redirectRequest = "GET / HTTP/1.1\r\nHost: " + locationHost + "\r\nConnection: close\r\n\r\n";
             redirectSocket.Send(redirectRequest);
