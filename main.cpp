@@ -1,3 +1,4 @@
+#include "http_response.h"
 #include "socket.h"
 #include <utility>
 #include <vector>
@@ -26,29 +27,30 @@ int main()
         } while (chunk.length() > 0);
         std::cout << "Received response from www.google.com:\n" << response << std::endl;
 
-        std::string searchString = "Location: ";
-        size_t start = response.find(searchString);
-        size_t end = response.find("\r\n", start);
-        std::string location = response.substr(start + searchString.length(), end - (start + searchString.length()));
-        std::cout << "Extracted Location header: " << location << std::endl;
-        Socket redirectSocket;
-        size_t hostStart = location.find("://") + 3;
-        size_t hostEnd = location.find("/", hostStart);
-        std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
-        if (redirectSocket.Connect(locationHost, "443", true) == 0)
-        {
-            std::string redirectRequest = "GET / HTTP/1.1\r\nHost: " + locationHost + "\r\nConnection: close\r\n\r\n";
-            redirectSocket.Send(redirectRequest);
-            std::string redirectResponse;
-            std::string redirectChunk;
-            do {
-                redirectChunk = redirectSocket.Receive();
-                redirectResponse += redirectChunk;
-            } while (redirectChunk.length() > 0);
-            std::cout << "Received response from redirected location:\n" << redirectResponse << std::endl;
+        if (const auto locationHeader = http::ExtractLocationHeader(response)) {
+            const std::string &location = *locationHeader;
+            std::cout << "Extracted Location header: " << location << std::endl;
+            Socket redirectSocket;
+            size_t hostStart = location.find("://");
+            if (hostStart != std::string::npos) {
+                hostStart += 3;
+                size_t hostEnd = location.find("/", hostStart);
+                std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
+                if (redirectSocket.Connect(locationHost, "443", true) == 0)
+                {
+                    std::string redirectRequest = "GET / HTTP/1.1\r\nHost: " + locationHost + "\r\nConnection: close\r\n\r\n";
+                    redirectSocket.Send(redirectRequest);
+                    std::string redirectResponse;
+                    std::string redirectChunk;
+                    do {
+                        redirectChunk = redirectSocket.Receive();
+                        redirectResponse += redirectChunk;
+                    } while (redirectChunk.length() > 0);
+                    std::cout << "Received response from redirected location:\n" << redirectResponse << std::endl;
+                }
+            }
         }
     }
-
     }
 
     if (Socket::ssl_ctx != nullptr) {
