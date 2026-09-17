@@ -11,7 +11,7 @@
 class Socket
 {
 public:
-    Socket()
+    Socket() : ssl(nullptr)
     {
         sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (ssl_ctx == nullptr)
