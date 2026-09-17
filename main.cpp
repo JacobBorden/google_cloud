@@ -1,5 +1,5 @@
+#include "http_response.h"
 #include "socket.h"
-#include <regex>
 #include <utility>
 #include <vector>
 #include <iostream>
@@ -27,10 +27,8 @@ int main()
         } while (chunk.length() > 0);
         std::cout << "Received response from www.google.com:\n" << response << std::endl;
 
-        std::regex locationRegex("\r\nLocation:[ \t]*([^\r\n]+)", std::regex::icase);
-        std::smatch match;
-        if (std::regex_search(response, match, locationRegex)) {
-            std::string location = match[1].str();
+        if (const auto locationHeader = http::ExtractLocationHeader(response)) {
+            const std::string &location = *locationHeader;
             std::cout << "Extracted Location header: " << location << std::endl;
             Socket redirectSocket;
             size_t hostStart = location.find("://");
