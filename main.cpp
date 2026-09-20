@@ -2,6 +2,7 @@
 #include <utility>
 #include <vector>
 #include <iostream>
+#include "httpresponse.h"
 SSL_CTX* Socket::ssl_ctx = nullptr;
 int main()
 {
@@ -26,26 +27,29 @@ int main()
         } while (chunk.length() > 0);
         std::cout << "Received response from www.google.com:\n" << response << std::endl;
 
-        std::string searchString = "Location: ";
-        size_t start = response.find(searchString);
-        size_t end = response.find("\r\n", start);
-        std::string location = response.substr(start + searchString.length(), end - (start + searchString.length()));
+        HttpResponse parsedResponse = HttpResponse::Parse(response);
+        std::string location = "";
+        if (parsedResponse.headers.find("Location") != parsedResponse.headers.end()) {
+            location = parsedResponse.headers["Location"];
+        }
         std::cout << "Extracted Location header: " << location << std::endl;
         Socket redirectSocket;
-        size_t hostStart = location.find("://") + 3;
-        size_t hostEnd = location.find("/", hostStart);
-        std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
-        if (redirectSocket.Connect(locationHost, "443", true) == 0)
-        {
+        if (!location.empty() && location.find("://") != std::string::npos) {
+            size_t hostStart = location.find("://") + 3;
+            size_t hostEnd = location.find("/", hostStart);
+            std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
+            if (redirectSocket.Connect(locationHost, "443", true) == 0)
+            {
             std::string redirectRequest = "GET / HTTP/1.1\r\nHost: " + locationHost + "\r\nConnection: close\r\n\r\n";
             redirectSocket.Send(redirectRequest);
-            std::string redirectResponse;
-            std::string redirectChunk;
-            do {
-                redirectChunk = redirectSocket.Receive();
-                redirectResponse += redirectChunk;
-            } while (redirectChunk.length() > 0);
-            std::cout << "Received response from redirected location:\n" << redirectResponse << std::endl;
+                std::string redirectResponse;
+                std::string redirectChunk;
+                do {
+                    redirectChunk = redirectSocket.Receive();
+                    redirectResponse += redirectChunk;
+                } while (redirectChunk.length() > 0);
+                std::cout << "Received response from redirected location:\n" << redirectResponse << std::endl;
+            }
         }
     }
 
