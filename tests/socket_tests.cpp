@@ -47,6 +47,10 @@ int main(int argc, char **argv) {
           "HTTP/1.1 302 Found\r\n"
           "lOcAtIoN:\thttps://example.test/next\r\n\r\n");
       Check(location && *location == "https://example.test/next");
+      const auto trimmed_location = http::ExtractLocationHeader(
+          "HTTP/1.1 302 Found\r\n"
+          "Location: https://example.test/next \t\r\n\r\n");
+      Check(trimmed_location && *trimmed_location == "https://example.test/next");
       Check(!http::ExtractLocationHeader(
           "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"));
       Check(!http::ExtractLocationHeader(

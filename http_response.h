@@ -13,7 +13,10 @@ inline std::optional<std::string> ExtractLocationHeader(
   std::smatch match;
   if (!std::regex_search(response, match, location_regex))
     return std::nullopt;
-  return match[1].str();
+  auto location = match[1].str();
+  const auto value_end = location.find_last_not_of(" \t");
+  location.erase(value_end + 1);
+  return location;
 }
 
 }  // namespace http
