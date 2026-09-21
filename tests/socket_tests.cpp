@@ -1,4 +1,5 @@
 #include "httprequest.h"
+#include "http_response.h"
 #include "socket.h"
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -42,6 +43,20 @@ int main(int argc, char **argv) {
               "POST /test HTTP/1.1\r\nHost: localhost\r\nContent-Type: "
               "text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\n") +
               std::string("a\0b", 3));
+      const auto location = http::ExtractLocationHeader(
+          "HTTP/1.1 302 Found\r\n"
+          "lOcAtIoN:\thttps://example.test/next\r\n\r\n");
+      Check(location && *location == "https://example.test/next");
+      const auto trimmed_location = http::ExtractLocationHeader(
+          "HTTP/1.1 302 Found\r\n"
+          "Location: https://example.test/next \t\r\n\r\n");
+      Check(trimmed_location && *trimmed_location == "https://example.test/next");
+      Check(!http::ExtractLocationHeader(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"));
+      Check(!http::ExtractLocationHeader(
+          "HTTP/1.1 302 Found\r\nLocation: \r\n\r\n"));
+      Check(!http::ExtractLocationHeader(
+          "HTTP/1.1 302 Found\nLocation: https://example.test/next\n\n"));
     } else if (group == "lifecycle") {
       int count = Fds();
       {
