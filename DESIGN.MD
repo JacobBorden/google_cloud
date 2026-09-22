@@ -4,6 +4,7 @@
 The project currently consists of a simple HTTP client implemented in C++:
 - **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets and integrates OpenSSL to handle both plain TCP and TLS connections. It handles `connect`, `send`, and `receive` operations. SSL initialization is tied directly to the class instantiation.
 - **`httprequest` Struct (`httprequest.h`):** A very basic structure representing an HTTP POST request. It provides a `ToString` method to serialize the request content.
+- **`httpresponse` Struct (`httpresponse.h`):** A basic structure containing HTTP response status and parsed headers to enable robust case-insensitive header lookup.
 - **`main.cpp`:** Contains a demonstration of creating sockets, connecting to Google (which redirects), parsing the response for the `Location` header, and following the redirect to the HTTPS endpoint. It releases the shared `Socket::ssl_ctx` after the socket objects have been destroyed.
 
 ## Class Responsibilities
@@ -24,6 +25,8 @@ The project currently consists of a simple HTTP client implemented in C++:
 
 2. **Robust HTTP Handling:**
    - Implement a proper HTTP response parser to handle status codes, headers (case-insensitively), and chunked transfer encoding.
+     - *Status codes and case-insensitive headers complete (2026-09-07).*
+     - *Chunked transfer encoding is pending.*
    - Expand `httprequest` to handle various HTTP methods (GET, POST, PUT, DELETE, etc.) and arbitrary headers.
 
 3. **Configuration and Error Handling:**
