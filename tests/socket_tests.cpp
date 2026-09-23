@@ -1,4 +1,5 @@
 #include "httprequest.h"
+#include "httpresponse.h"
 #include "socket.h"
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -42,6 +43,18 @@ int main(int argc, char **argv) {
               "POST /test HTTP/1.1\r\nHost: localhost\r\nContent-Type: "
               "text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\n") +
               std::string("a\0b", 3));
+
+      std::string dummyResponse =
+          "HTTP/1.1 301 Moved Permanently\r\n"
+          "Location: http://www.example.com/\r\n"
+          "Content-Length: 10\r\n"
+          "Connection: close\r\n\r\n"
+          "0123456789";
+      auto parsed = HttpResponse::Parse(dummyResponse);
+      Check(parsed.statusCode == 301);
+      Check(parsed.headers["location"] == "http://www.example.com/");
+      Check(parsed.headers["content-length"] == "10");
+      Check(parsed.body == "0123456789");
     } else if (group == "lifecycle") {
       int count = Fds();
       {
