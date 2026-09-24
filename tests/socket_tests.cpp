@@ -1,5 +1,6 @@
 #include "httprequest.h"
 #include "socket.h"
+#include "http_utils.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <stdexcept>
@@ -87,6 +88,13 @@ int main(int argc, char **argv) {
         Check(client.Receive(MSG_WAITALL) == "pong");
       }
       Check(Fds() == count);
+    } else if (group == "headers") {
+      std::string response = "HTTP/1.1 301 Moved Permanently\r\n"
+                             "lOcAtIoN:   https://www.google.com/ \r\n"
+                             "Content-Length: 0\r\n\r\n";
+      Check(extractHeader(response, "Location") == "https://www.google.com/ ");
+      Check(extractHeader(response, "content-length") == "0");
+      Check(extractHeader(response, "Missing") == "");
     } else
       throw std::runtime_error("unknown group");
   } catch (const std::exception &e) {
