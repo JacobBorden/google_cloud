@@ -1,5 +1,6 @@
 #include "httprequest.h"
 #include "socket.h"
+#include "http_parser.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <stdexcept>
@@ -33,7 +34,32 @@ int main(int argc, char **argv) {
     static_assert(!std::is_copy_constructible_v<Socket>);
     static_assert(std::is_nothrow_move_constructible_v<Socket>);
     std::string group = argc > 1 ? argv[1] : "";
-    if (group == "request") {
+    if (group == "parser") {
+        std::string response =
+            "HTTP/1.1 302 Found\r\n"
+            "Location: https://www.google.com/\r\n"
+            "Content-Type: text/html; charset=UTF-8\r\n"
+            "Date: Mon, 01 Jan 2024 12:00:00 GMT\r\n"
+            "\r\n"
+            "<html><body>Hello</body></html>";
+        Check(extract_header(response, "Location") == "https://www.google.com/");
+        Check(extract_header(response, "location") == "https://www.google.com/");
+        Check(extract_header(response, "Content-Type") == "text/html; charset=UTF-8");
+        Check(extract_header(response, "Missing") == "");
+
+        std::string response_no_cr =
+            "HTTP/1.1 200 OK\n"
+            "content-length: 42\n"
+            "\n"
+            "data";
+        Check(extract_header(response_no_cr, "Content-Length") == "42");
+
+        std::string response_weird_space =
+            "HTTP/1.1 200 OK\r\n"
+            "Test-Header:    value with space   \r\n"
+            "\r\n";
+        Check(extract_header(response_weird_space, "test-header") == "value with space");
+    } else if (group == "request") {
       httprequest r("text/plain", std::string("a\0b", 3));
       auto wire = r.ToString("localhost", "/test");
       Check(
