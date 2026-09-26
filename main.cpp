@@ -2,6 +2,8 @@
 #include <utility>
 #include <vector>
 #include <iostream>
+#include <regex>
+#include <algorithm>
 SSL_CTX* Socket::ssl_ctx = nullptr;
 int main()
 {
@@ -26,13 +28,20 @@ int main()
         } while (chunk.length() > 0);
         std::cout << "Received response from www.google.com:\n" << response << std::endl;
 
-        std::string searchString = "Location: ";
-        size_t start = response.find(searchString);
-        size_t end = response.find("\r\n", start);
-        std::string location = response.substr(start + searchString.length(), end - (start + searchString.length()));
+        std::string location;
+        std::regex locationRegex("(?:^|\\r\\n|\\n)location:\\s*([^\\r\\n]+)", std::regex_constants::icase);
+        std::smatch match;
+        if (std::regex_search(response, match, locationRegex)) {
+            location = match[1].str();
+            location.erase(std::find_if(location.rbegin(), location.rend(), [](unsigned char ch) {
+                return !std::isspace(ch);
+            }).base(), location.end());
+        }
         std::cout << "Extracted Location header: " << location << std::endl;
         Socket redirectSocket;
-        size_t hostStart = location.find("://") + 3;
+        size_t hostStart = location.find("://");
+        if (hostStart != std::string::npos) hostStart += 3;
+        else hostStart = 0;
         size_t hostEnd = location.find("/", hostStart);
         std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
         if (redirectSocket.Connect(locationHost, "443", true) == 0)
