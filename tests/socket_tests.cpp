@@ -57,6 +57,11 @@ int main(int argc, char **argv) {
           "HTTP/1.1 302 Found\r\nLocation: \r\n\r\n"));
       Check(!http::ExtractLocationHeader(
           "HTTP/1.1 302 Found\nLocation: https://example.test/next\n\n"));
+      Check(!http::ExtractLocationHeader(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+          "body\r\nLocation: https://example.test/forged\r\n"));
+      Check(!http::ExtractLocationHeader(
+          "HTTP/1.1 302 Found\r\nLocation: https://example.test/partial"));
     } else if (group == "lifecycle") {
       int count = Fds();
       {
