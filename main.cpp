@@ -2,6 +2,11 @@
 #include <utility>
 #include <vector>
 #include <iostream>
+#include <algorithm>
+#include <cctype>
+
+std::string extractHeaderValue(const std::string& response, const std::string& headerName);
+
 SSL_CTX* Socket::ssl_ctx = nullptr;
 int main()
 {
@@ -26,26 +31,28 @@ int main()
         } while (chunk.length() > 0);
         std::cout << "Received response from www.google.com:\n" << response << std::endl;
 
-        std::string searchString = "Location: ";
-        size_t start = response.find(searchString);
-        size_t end = response.find("\r\n", start);
-        std::string location = response.substr(start + searchString.length(), end - (start + searchString.length()));
+        std::string location = extractHeaderValue(response, "Location");
         std::cout << "Extracted Location header: " << location << std::endl;
-        Socket redirectSocket;
-        size_t hostStart = location.find("://") + 3;
-        size_t hostEnd = location.find("/", hostStart);
-        std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
-        if (redirectSocket.Connect(locationHost, "443", true) == 0)
-        {
-            std::string redirectRequest = "GET / HTTP/1.1\r\nHost: " + locationHost + "\r\nConnection: close\r\n\r\n";
-            redirectSocket.Send(redirectRequest);
-            std::string redirectResponse;
-            std::string redirectChunk;
-            do {
-                redirectChunk = redirectSocket.Receive();
-                redirectResponse += redirectChunk;
-            } while (redirectChunk.length() > 0);
-            std::cout << "Received response from redirected location:\n" << redirectResponse << std::endl;
+        if (!location.empty()) {
+            Socket redirectSocket;
+            size_t hostStart = location.find("://");
+            if (hostStart != std::string::npos) {
+                hostStart += 3;
+                size_t hostEnd = location.find("/", hostStart);
+                std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
+                if (redirectSocket.Connect(locationHost, "443", true) == 0)
+                {
+                    std::string redirectRequest = "GET / HTTP/1.1\r\nHost: " + locationHost + "\r\nConnection: close\r\n\r\n";
+                    redirectSocket.Send(redirectRequest);
+                    std::string redirectResponse;
+                    std::string redirectChunk;
+                    do {
+                        redirectChunk = redirectSocket.Receive();
+                        redirectResponse += redirectChunk;
+                    } while (redirectChunk.length() > 0);
+                    std::cout << "Received response from redirected location:\n" << redirectResponse << std::endl;
+                }
+            }
         }
     }
 
@@ -57,4 +64,45 @@ int main()
     }
 
     return 0;
+}
+
+std::string extractHeaderValue(const std::string& response, const std::string& headerName) {
+    std::string lowerHeaderName = headerName;
+    std::transform(lowerHeaderName.begin(), lowerHeaderName.end(), lowerHeaderName.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+    size_t pos = 0;
+    while (pos < response.length()) {
+        size_t endOfLine = response.find("\r\n", pos);
+        if (endOfLine == std::string::npos) {
+            break;
+        }
+
+        std::string line = response.substr(pos, endOfLine - pos);
+        pos = endOfLine + 2; // Move past \r\n
+
+        if (line.empty()) {
+            break; // Empty line means end of headers
+        }
+
+        size_t colonPos = line.find(':');
+        if (colonPos != std::string::npos) {
+            std::string name = line.substr(0, colonPos);
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [](unsigned char c){ return std::tolower(c); });
+
+            if (name == lowerHeaderName) {
+                size_t valueStart = colonPos + 1;
+                while (valueStart < line.length() && std::isspace(static_cast<unsigned char>(line[valueStart]))) {
+                    valueStart++;
+                }
+                size_t valueEnd = line.length();
+                while (valueEnd > valueStart && std::isspace(static_cast<unsigned char>(line[valueEnd - 1]))) {
+                    valueEnd--;
+                }
+                return line.substr(valueStart, valueEnd - valueStart);
+            }
+        }
+    }
+    return "";
 }
