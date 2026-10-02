@@ -1,6 +1,9 @@
 #ifndef _HTTPREQUEST_
 #define _HTTPREQUEST_
+#include <algorithm>
+#include <cctype>
 #include <string>
+#include <utility>
 #include <vector>
 struct httprequest
 {
@@ -27,7 +30,11 @@ struct httprequest
         bool has_connection = false;
         for (const auto& header : headers) {
             request += header.first + ": " + header.second + "\r\n";
-            if (header.first == "Connection") {
+            if (header.first.size() == 10 &&
+                std::equal(header.first.begin(), header.first.end(),
+                           "Connection", [](unsigned char a, unsigned char b) {
+                               return std::tolower(a) == std::tolower(b);
+                           })) {
                 has_connection = true;
             }
         }

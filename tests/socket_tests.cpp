@@ -2,6 +2,8 @@
 #include "http_response.h"
 #include "socket.h"
 #include <arpa/inet.h>
+#include <chrono>
+#include <cerrno>
 #include <dirent.h>
 #include <stdexcept>
 #include <type_traits>
@@ -43,6 +45,14 @@ int main(int argc, char **argv) {
               "POST /test HTTP/1.1\r\nHost: localhost\r\nContent-Type: "
               "text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\n") +
               std::string("a\0b", 3));
+      httprequest custom;
+      custom.method = "PUT";
+      custom.body = "payload";
+      custom.AddHeader("cOnNeCtIoN", "keep-alive");
+      custom.AddHeader("X-Trace", "test");
+      Check(custom.ToString("localhost", "/resource") ==
+            "PUT /resource HTTP/1.1\r\nHost: localhost\r\n"
+            "cOnNeCtIoN: keep-alive\r\nX-Trace: test\r\n\r\npayload");
       const auto location = http::ExtractLocationHeader(
           "HTTP/1.1 302 Found\r\n"
           "lOcAtIoN:\thttps://example.test/next\r\n\r\n");
@@ -105,6 +115,52 @@ int main(int argc, char **argv) {
         Check(shutdown(peer.value, SHUT_WR) == 0);
         Check(client.Receive(0, 0).empty());
         Check(client.Receive(MSG_WAITALL) == "pong");
+      }
+      Check(Fds() == count);
+      {
+        Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+        Check(listener.value >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+                   sizeof(address)) == 0);
+        Check(listen(listener.value, 1) == 0);
+        socklen_t length = sizeof(address);
+        Check(getsockname(listener.value,
+                          reinterpret_cast<sockaddr *>(&address),
+                          &length) == 0);
+        Socket client;
+        client.SetIoTimeout(150);
+        Socket moved(std::move(client));
+        Check(!client.isValid());
+        Check(moved.Connect("127.0.0.1",
+                             std::to_string(ntohs(address.sin_port)), false) == 0);
+        Fd peer{accept(listener.value, nullptr, nullptr)};
+        Check(peer.value >= 0);
+        auto receive_timeout = [](Socket &socket) {
+          const auto start = std::chrono::steady_clock::now();
+          Check(socket.Receive().empty());
+          Check(errno == EAGAIN || errno == EWOULDBLOCK);
+          return std::chrono::steady_clock::now() - start;
+        };
+        const auto before_connect = receive_timeout(moved);
+        Check(before_connect >= std::chrono::milliseconds(75));
+        Check(before_connect < std::chrono::seconds(2));
+        Socket assigned;
+        assigned = std::move(moved);
+        Check(!moved.isValid());
+        assigned.SetIoTimeout(75);
+        const auto after_connect = receive_timeout(assigned);
+        Check(after_connect >= std::chrono::milliseconds(35));
+        Check(after_connect < std::chrono::seconds(2));
+        bool rejected_negative = false;
+        try {
+          assigned.SetIoTimeout(-1);
+        } catch (const std::invalid_argument &) {
+          rejected_negative = true;
+        }
+        Check(rejected_negative);
       }
       Check(Fds() == count);
     } else
