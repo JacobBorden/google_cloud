@@ -23,10 +23,11 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), timeout_ms(other.timeout_ms)
     {
         other.sockfd = -1;
         other.ssl = nullptr;
+        other.timeout_ms = 0;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
@@ -45,6 +46,8 @@ public:
             other.sockfd = -1;
             ssl = other.ssl;
             other.ssl = nullptr;
+            timeout_ms = other.timeout_ms;
+            other.timeout_ms = 0;
         }
         return *this;
     }
@@ -86,6 +89,16 @@ public:
         {
             sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
             if (sockfd == -1) continue;
+
+            if (timeout_ms > 0)
+            {
+                struct timeval tv;
+                tv.tv_sec = timeout_ms / 1000;
+                tv.tv_usec = (timeout_ms % 1000) * 1000;
+                setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            }
+
             int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
             if (success == 0)
             {
@@ -112,6 +125,19 @@ public:
 
         return 0; // Success
     }
+    void SetTimeout(int timeout_ms_)
+    {
+        timeout_ms = timeout_ms_;
+        if (sockfd != -1)
+        {
+            struct timeval tv;
+            tv.tv_sec = timeout_ms / 1000;
+            tv.tv_usec = (timeout_ms % 1000) * 1000;
+            setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        }
+    }
+
     ssize_t Send(const std::string &buf, int flags = 0)
     {
         ssize_t bytes_sent = send(sockfd, buf.c_str(), buf.length(), flags);
@@ -138,6 +164,7 @@ private:
     int sockfd = -1;
     
     SSL *ssl = nullptr;
+    int timeout_ms = 0;
 };
 
 #endif // SOCKET_H
