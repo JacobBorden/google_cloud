@@ -52,7 +52,16 @@ int main(int argc, char **argv) {
       custom.AddHeader("X-Trace", "test");
       Check(custom.ToString("localhost", "/resource") ==
             "PUT /resource HTTP/1.1\r\nHost: localhost\r\n"
-            "cOnNeCtIoN: keep-alive\r\nX-Trace: test\r\n\r\npayload");
+            "cOnNeCtIoN: keep-alive\r\nX-Trace: test\r\n"
+            "Content-Length: 7\r\n\r\npayload");
+      custom.AddHeader("content-length", "7");
+      Check(custom.ToString("localhost", "/resource").find(
+                "Content-Length: 7\r\n") == std::string::npos);
+      custom.headers.pop_back();
+      custom.AddHeader("transfer-encoding", "chunked");
+      custom.body = "7\r\npayload\r\n0\r\n\r\n";
+      Check(custom.ToString("localhost", "/resource").find(
+                "Content-Length:") == std::string::npos);
       const auto location = http::ExtractLocationHeader(
           "HTTP/1.1 302 Found\r\n"
           "lOcAtIoN:\thttps://example.test/next\r\n\r\n");

@@ -28,19 +28,28 @@ struct httprequest
         request += "Host: " + host + "\r\n";
 
         bool has_connection = false;
+        bool has_content_length = false;
+        bool has_transfer_encoding = false;
+        const auto is_header = [](const std::string& name, const char* expected,
+                                  std::size_t length) {
+            return name.size() == length &&
+                   std::equal(name.begin(), name.end(), expected,
+                              [](unsigned char a, unsigned char b) {
+                                  return std::tolower(a) == std::tolower(b);
+                              });
+        };
         for (const auto& header : headers) {
             request += header.first + ": " + header.second + "\r\n";
-            if (header.first.size() == 10 &&
-                std::equal(header.first.begin(), header.first.end(),
-                           "Connection", [](unsigned char a, unsigned char b) {
-                               return std::tolower(a) == std::tolower(b);
-                           })) {
-                has_connection = true;
-            }
+            has_connection |= is_header(header.first, "Connection", 10);
+            has_content_length |= is_header(header.first, "Content-Length", 14);
+            has_transfer_encoding |= is_header(header.first, "Transfer-Encoding", 17);
         }
 
         if (!has_connection) {
             request += "Connection: close\r\n";
+        }
+        if (!body.empty() && !has_content_length && !has_transfer_encoding) {
+            request += "Content-Length: " + std::to_string(body.size()) + "\r\n";
         }
 
         request += "\r\n";

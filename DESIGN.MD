@@ -17,7 +17,7 @@ The project currently consists of a simple HTTP client implemented in C++:
 
 2. **`httprequest`:**
    - Storing the request method, arbitrary headers, and body.
-   - Formatting an HTTP/1.1 request string, with a default `Connection: close` unless the caller supplies that header in any case spelling. Header names and values are not validated or parsed.
+   - Formatting an HTTP/1.1 request string, with a default `Connection: close` unless the caller supplies that header in any case spelling. A nonempty body gets a computed `Content-Length` unless the caller supplies length or transfer framing. Caller-supplied framing and header values are not validated.
 
 ## Future Design Goals
 1. **Separation of Concerns:**
