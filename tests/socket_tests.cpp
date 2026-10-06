@@ -36,12 +36,14 @@ int main(int argc, char **argv) {
     std::string group = argc > 1 ? argv[1] : "";
     if (group == "request") {
       httprequest r("text/plain", std::string("a\0b", 3));
+      r.AddHeader("X-Custom", "value");
       auto wire = r.ToString("localhost", "/test");
       Check(
           wire ==
           std::string(
               "POST /test HTTP/1.1\r\nHost: localhost\r\nContent-Type: "
-              "text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\n") +
+              "text/plain\r\nContent-Length: 3\r\nConnection: close\r\n"
+              "X-Custom: value\r\n\r\n") +
               std::string("a\0b", 3));
       const auto location = http::ExtractLocationHeader(
           "HTTP/1.1 302 Found\r\n"

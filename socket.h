@@ -6,6 +6,8 @@
 #include <string>
 #include <cstring>
 #include <cerrno>
+#include <sys/time.h>
+#include <fcntl.h>
 #include <openssl/ssl.h>
 #include <iostream>
 class Socket
@@ -63,7 +65,7 @@ public:
     {
         return sockfd != -1;
     }
-    int Connect(const std::string &address, const std::string &service, bool use_tls)
+    int Connect(const std::string &address, const std::string &service, bool use_tls, int timeout_sec = 0)
     {
         if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
         if (sockfd != -1) { close(sockfd); sockfd = -1; }
@@ -86,7 +88,44 @@ public:
         {
             sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
             if (sockfd == -1) continue;
+            if (timeout_sec > 0) {
+                long arg = fcntl(sockfd, F_GETFL, NULL);
+                arg |= O_NONBLOCK;
+                fcntl(sockfd, F_SETFL, arg);
+            }
+
             int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
+
+            if (success < 0 && errno == EINPROGRESS && timeout_sec > 0) {
+                fd_set myset;
+                struct timeval tv;
+                tv.tv_sec = timeout_sec;
+                tv.tv_usec = 0;
+                FD_ZERO(&myset);
+                FD_SET(sockfd, &myset);
+                int res = select(sockfd + 1, NULL, &myset, NULL, &tv);
+                if (res > 0) {
+                    int valopt;
+                    socklen_t lon = sizeof(int);
+                    getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (void*)(&valopt), &lon);
+                    if (valopt) {
+                        success = -1;
+                        errno = valopt;
+                    } else {
+                        success = 0;
+                    }
+                } else {
+                    success = -1;
+                    errno = ETIMEDOUT;
+                }
+            }
+
+            if (timeout_sec > 0) {
+                long arg = fcntl(sockfd, F_GETFL, NULL);
+                arg &= (~O_NONBLOCK);
+                fcntl(sockfd, F_SETFL, arg);
+            }
+
             if (success == 0)
             {
                 if (use_tls)
@@ -112,6 +151,15 @@ public:
 
         return 0; // Success
     }
+    void SetTimeout(int timeout_sec) {
+        if (sockfd == -1) return;
+        struct timeval tv;
+        tv.tv_sec = timeout_sec;
+        tv.tv_usec = 0;
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+        setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+    }
+
     ssize_t Send(const std::string &buf, int flags = 0)
     {
         ssize_t bytes_sent = send(sockfd, buf.c_str(), buf.length(), flags);

@@ -33,8 +33,8 @@
    - It would be better to abstract the SSL layer or create a specialized `SSLSocket` class.
 
 4. **Missing features:**
-   - No way to specify a timeout for `Connect`, `Send`, or `Receive`.
-   - The `httprequest` struct is minimal and doesn't handle headers robustly.
+   - ~~No way to specify a timeout for `Connect`, `Send`, or `Receive`.~~
+   - ~~The `httprequest` struct is minimal and doesn't handle headers robustly.~~
 
 ## Tested lifecycle recovery (2026-09-07)
 
