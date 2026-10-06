@@ -62,6 +62,24 @@ int main(int argc, char **argv) {
       custom.body = "7\r\npayload\r\n0\r\n\r\n";
       Check(custom.ToString("localhost", "/resource").find(
                 "Content-Length:") == std::string::npos);
+      auto rejects_request = [](auto action) {
+        try {
+          action();
+        } catch (const std::invalid_argument &) {
+          return true;
+        }
+        return false;
+      };
+      Check(rejects_request([&] { custom.AddHeader("X-Bad\r\nInjected", "x"); }));
+      Check(rejects_request([&] { custom.AddHeader("X-Bad", "x\r\nInjected: y"); }));
+      custom.headers.push_back({"X-Direct", "x\nInjected: y"});
+      Check(rejects_request([&] { custom.ToString("localhost", "/resource"); }));
+      custom.headers.pop_back();
+      Check(rejects_request([&] { custom.ToString("host\r\nInjected: y", "/resource"); }));
+      Check(rejects_request([&] { custom.ToString("localhost", "/resource\r\nInjected: y"); }));
+      custom.method = "GET\r\nInjected";
+      Check(rejects_request([&] { custom.ToString("localhost", "/resource"); }));
+      custom.method = "PUT";
       const auto location = http::ExtractLocationHeader(
           "HTTP/1.1 302 Found\r\n"
           "lOcAtIoN:\thttps://example.test/next\r\n\r\n");
