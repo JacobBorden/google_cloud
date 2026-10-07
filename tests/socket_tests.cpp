@@ -72,10 +72,16 @@ int main(int argc, char **argv) {
       };
       Check(rejects_request([&] { custom.AddHeader("X-Bad\r\nInjected", "x"); }));
       Check(rejects_request([&] { custom.AddHeader("X-Bad", "x\r\nInjected: y"); }));
+      Check(rejects_request([&] { custom.AddHeader("hOsT", "other.example"); }));
+      custom.headers.push_back({"HOST", "other.example"});
+      Check(rejects_request([&] { custom.ToString("localhost", "/resource"); }));
+      custom.headers.pop_back();
       custom.headers.push_back({"X-Direct", "x\nInjected: y"});
       Check(rejects_request([&] { custom.ToString("localhost", "/resource"); }));
       custom.headers.pop_back();
       Check(rejects_request([&] { custom.ToString("host\r\nInjected: y", "/resource"); }));
+      Check(rejects_request([&] { custom.ToString("", "/resource"); }));
+      Check(rejects_request([&] { custom.ToString("local\thost", "/resource"); }));
       Check(rejects_request([&] { custom.ToString("localhost", "/resource\r\nInjected: y"); }));
       custom.method = "GET\r\nInjected";
       Check(rejects_request([&] { custom.ToString("localhost", "/resource"); }));

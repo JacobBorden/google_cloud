@@ -22,11 +22,19 @@ struct httprequest
 
     void AddHeader(const std::string& name, const std::string& value) {
         ValidateHeader(name, value);
+        if (IsHeader(name, "Host")) {
+            throw std::invalid_argument("Host is generated from the request target");
+        }
         headers.push_back({name, value});
     }
     std::string ToString(const std::string& host, const std::string& path) const {
         ValidateToken(method);
         ValidateHeader("Host", host);
+        if (host.empty() || std::any_of(host.begin(), host.end(), [](unsigned char ch) {
+                return ch == ' ' || ch == '\t';
+            })) {
+            throw std::invalid_argument("Invalid HTTP host");
+        }
         if (path.empty() || std::any_of(path.begin(), path.end(), [](unsigned char ch) {
                 return ch <= 0x20 || ch == 0x7f;
             })) {
@@ -39,20 +47,15 @@ struct httprequest
         bool has_connection = false;
         bool has_content_length = false;
         bool has_transfer_encoding = false;
-        const auto is_header = [](const std::string& name, const char* expected,
-                                  std::size_t length) {
-            return name.size() == length &&
-                   std::equal(name.begin(), name.end(), expected,
-                              [](unsigned char a, unsigned char b) {
-                                  return std::tolower(a) == std::tolower(b);
-                              });
-        };
         for (const auto& header : headers) {
             ValidateHeader(header.first, header.second);
+            if (IsHeader(header.first, "Host")) {
+                throw std::invalid_argument("Host is generated from the request target");
+            }
             request += header.first + ": " + header.second + "\r\n";
-            has_connection |= is_header(header.first, "Connection", 10);
-            has_content_length |= is_header(header.first, "Content-Length", 14);
-            has_transfer_encoding |= is_header(header.first, "Transfer-Encoding", 17);
+            has_connection |= IsHeader(header.first, "Connection");
+            has_content_length |= IsHeader(header.first, "Content-Length");
+            has_transfer_encoding |= IsHeader(header.first, "Transfer-Encoding");
         }
 
         if (!has_connection) {
@@ -68,6 +71,13 @@ struct httprequest
     }
     std::string body;
 private:
+    static bool IsHeader(const std::string& name, const std::string& expected) {
+        return name.size() == expected.size() &&
+               std::equal(name.begin(), name.end(), expected.begin(),
+                          [](unsigned char a, unsigned char b) {
+                              return std::tolower(a) == std::tolower(b);
+                          });
+    }
     static void ValidateToken(const std::string& token) {
         const std::string punctuation = "!#$%&'*+-.^_`|~";
         if (token.empty() || std::any_of(token.begin(), token.end(),
