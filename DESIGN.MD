@@ -2,8 +2,8 @@
 
 ## Current Architecture
 The project currently consists of a simple HTTP client implemented in C++:
-- **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets and integrates OpenSSL to handle both plain TCP and TLS connections. It handles `connect`, `send`, and `receive` operations. SSL initialization is tied directly to the class instantiation.
-- **`httprequest` Struct (`httprequest.h`):** A very basic structure representing an HTTP POST request. It provides a `ToString` method to serialize the request content.
+- **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets and integrates OpenSSL to handle both plain TCP and TLS connections. It handles `connect`, `send`, and `receive` operations. Callers can set a socket send/receive timeout; DNS lookup and connection establishment remain blocking. SSL initialization is tied directly to the class instantiation.
+- **`httprequest` Struct (`httprequest.h`):** Stores a method, body, and caller-supplied request headers. It provides a `ToString` method to serialize an HTTP/1.1 request. The existing two-argument constructor still creates a POST request with content type and length.
 - **`main.cpp`:** Contains a demonstration of creating sockets, connecting to Google (which redirects), extracting an absolute `Location` response header, and following the redirect to the HTTPS endpoint. It releases the shared `Socket::ssl_ctx` after the socket objects have been destroyed.
 - **`http_response.h`:** Provides the currently narrow, offline-tested `Location` header extractor. It searches only a complete CRLF-delimited header section, recognizes the field name case-insensitively, and permits spaces or tabs after the colon; it is not a complete HTTP response parser.
 
@@ -13,10 +13,11 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Resolution of hostnames to IP addresses using `getaddrinfo`.
    - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
    - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
+   - Applying a millisecond I/O timeout to the underlying socket before or after `Connect`; this governs plaintext `Send` and `Receive`, but does not bound DNS lookup or blocking connection establishment. `Receive` currently returns an empty string for both timeout and EOF.
 
 2. **`httprequest`:**
-   - Storing content type, length, and body.
-   - Formatting an HTTP POST request string.
+   - Storing the request method, arbitrary headers, and body.
+   - Formatting an HTTP/1.1 request string, with a default `Connection: close` unless the caller supplies that header in any case spelling. A nonempty body gets a computed `Content-Length` unless the caller supplies length or transfer framing. The serializer owns the single `Host` header and rejects caller-supplied duplicates, empty hosts, and host whitespace. Request methods and header names must be tokens; control characters in header values, host, and request target are rejected to prevent line injection. Caller-supplied framing values are not checked against the body.
 
 ## Future Design Goals
 1. **Separation of Concerns:**
@@ -25,11 +26,11 @@ The project currently consists of a simple HTTP client implemented in C++:
 
 2. **Robust HTTP Handling:**
    - Implement a proper HTTP response parser to handle status codes, headers (case-insensitively), and chunked transfer encoding.
-   - Expand `httprequest` to handle various HTTP methods (GET, POST, PUT, DELETE, etc.) and arbitrary headers.
+   - Validate request methods and headers, and derive or check `Content-Length` when the body changes.
 
 3. **Configuration and Error Handling:**
    - Introduce custom exceptions or a robust error-code returning mechanism instead of relying solely on `-1` and printing to `std::cerr`.
-   - Add configurable connection timeouts and read/write timeouts.
+   - Add bounded DNS resolution and connection establishment; make timeout errors distinguishable from EOF in `Receive`.
 
 4. **Resource Management:**
    - `Socket` instances own their file descriptors and `SSL*` connections; `main` owns final cleanup of the shared `Socket::ssl_ctx` after all sockets are out of scope.
