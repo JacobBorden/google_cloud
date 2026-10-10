@@ -9,25 +9,18 @@
 #include <stdexcept>
 #include <openssl/ssl.h>
 #include <iostream>
+
 class Socket
 {
 public:
     Socket()
     {
         sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (ssl_ctx == nullptr)
-        {
-            SSL_library_init();
-            OpenSSL_add_all_algorithms();
-            SSL_load_error_strings();
-            ssl_ctx = SSL_CTX_new(TLS_client_method());
-        }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), io_timeout_ms(other.io_timeout_ms)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), io_timeout_ms(other.io_timeout_ms)
     {
         other.sockfd = -1;
-        other.ssl = nullptr;
         other.io_timeout_ms = 0;
     }
     Socket &operator=(const Socket &) = delete;
@@ -35,29 +28,19 @@ public:
     {
         if (this != &other)
         {
-            if (ssl != nullptr)
-            {
-                SSL_free(ssl);
-            }
             if (sockfd != -1)
             {
                 close(sockfd);
             }
             sockfd = other.sockfd;
             other.sockfd = -1;
-            ssl = other.ssl;
-            other.ssl = nullptr;
             io_timeout_ms = other.io_timeout_ms;
             other.io_timeout_ms = 0;
         }
         return *this;
     }
-    ~Socket()
+    virtual ~Socket()
     {
-        if (ssl != nullptr)
-        {
-            SSL_free(ssl);
-        }
         if (sockfd != -1)
         {
             close(sockfd);
@@ -67,9 +50,8 @@ public:
     {
         return sockfd != -1;
     }
-    int Connect(const std::string &address, const std::string &service, bool use_tls)
+    virtual int Connect(const std::string &address, const std::string &service)
     {
-        if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
         if (sockfd != -1) { close(sockfd); sockfd = -1; }
         struct addrinfo hints{};
         hints.ai_family = AF_UNSPEC;
@@ -104,12 +86,6 @@ public:
             int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
             if (success == 0)
             {
-                if (use_tls)
-                {
-                    ssl = SSL_new(ssl_ctx);
-                    SSL_set_fd(ssl, sockfd);
-                    SSL_connect(ssl);
-                }
                 break; // Successfully connected
             }
             if (success == -1)
@@ -127,6 +103,7 @@ public:
 
         return 0; // Success
     }
+
     // Applies to send and receive. Name resolution and connect remain blocking.
     void SetIoTimeout(int timeout_ms)
     {
@@ -144,13 +121,13 @@ public:
         io_timeout_ms = timeout_ms;
     }
 
-    ssize_t Send(const std::string &buf, int flags = 0)
+    virtual ssize_t Send(const std::string &buf, int flags = 0)
     {
         ssize_t bytes_sent = send(sockfd, buf.c_str(), buf.length(), flags);
         return bytes_sent;
     }
 
-    std::string Receive(int flags = 0, size_t max_length = 4096)
+    virtual std::string Receive(int flags = 0, size_t max_length = 4096)
     {
         if (max_length == 0)
         {
@@ -165,8 +142,8 @@ public:
         }
         return "";
     }
-static SSL_CTX *ssl_ctx;
-private:
+
+protected:
     static bool ApplyIoTimeout(int fd, int timeout_ms)
     {
         const struct timeval tv{timeout_ms / 1000, (timeout_ms % 1000) * 1000};
@@ -174,9 +151,103 @@ private:
                setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0;
     }
     int sockfd = -1;
-    
-    SSL *ssl = nullptr;
     int io_timeout_ms = 0;
+};
+
+class SSLSocket : public Socket
+{
+public:
+    SSLSocket() : Socket()
+    {
+        if (ssl_ctx == nullptr)
+        {
+            SSL_library_init();
+            OpenSSL_add_all_algorithms();
+            SSL_load_error_strings();
+            ssl_ctx = SSL_CTX_new(TLS_client_method());
+        }
+    }
+    SSLSocket(const SSLSocket &) = delete;
+    SSLSocket(SSLSocket &&other) noexcept : Socket(std::move(other)), ssl(other.ssl)
+    {
+        other.ssl = nullptr;
+    }
+    SSLSocket &operator=(const SSLSocket &) = delete;
+    SSLSocket &operator=(SSLSocket &&other) noexcept
+    {
+        if (this != &other)
+        {
+            if (ssl != nullptr)
+            {
+                SSL_free(ssl);
+            }
+            Socket::operator=(std::move(other));
+            ssl = other.ssl;
+            other.ssl = nullptr;
+        }
+        return *this;
+    }
+    ~SSLSocket() override
+    {
+        if (ssl != nullptr)
+        {
+            SSL_free(ssl);
+        }
+    }
+
+    int Connect(const std::string &address, const std::string &service) override
+    {
+        if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
+        int result = Socket::Connect(address, service);
+        if (result == 0)
+        {
+            ssl = SSL_new(ssl_ctx);
+            SSL_set_fd(ssl, sockfd);
+            if (SSL_connect(ssl) != 1) {
+                SSL_free(ssl);
+                ssl = nullptr;
+                close(sockfd);
+                sockfd = -1;
+                return -1;
+            }
+        }
+        return result;
+    }
+
+    ssize_t Send(const std::string &buf, int flags = 0) override
+    {
+        if (ssl != nullptr)
+        {
+            (void)flags; // ignoring flags for ssl for now
+            return SSL_write(ssl, buf.c_str(), buf.length());
+        }
+        return Socket::Send(buf, flags);
+    }
+
+    std::string Receive(int flags = 0, size_t max_length = 4096) override
+    {
+        if (max_length == 0)
+        {
+            return "";
+        }
+        if (ssl != nullptr)
+        {
+            (void)flags; // ignoring flags
+            std::string buffer(max_length, '\0');
+            int bytes_received = SSL_read(ssl, &buffer[0], buffer.size());
+            if (bytes_received > 0)
+            {
+                buffer.resize(bytes_received);
+                return buffer;
+            }
+            return "";
+        }
+        return Socket::Receive(flags, max_length);
+    }
+
+    static SSL_CTX *ssl_ctx;
+private:
+    SSL *ssl = nullptr;
 };
 
 #endif // SOCKET_H
