@@ -20,8 +20,8 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Formatting an HTTP/1.1 request string, with a default `Connection: close` unless the caller supplies that header in any case spelling. A nonempty body gets a computed `Content-Length` unless the caller supplies length or transfer framing. The serializer owns the single `Host` header and rejects caller-supplied duplicates, empty hosts, and host whitespace. Request methods and header names must be tokens; control characters in header values, host, and request target are rejected to prevent line injection. Caller-supplied framing values are not checked against the body.
 
 ## Future Design Goals
-1. **Separation of Concerns:**
-   - Extract the SSL logic from the base `Socket` class. Consider creating an interface (e.g., `ISocket`) with `TCPSocket` and `TLSSocket` implementations.
+1. ~~**Separation of Concerns:**~~
+   - ~~Extract the SSL logic from the base `Socket` class. Consider creating an interface (e.g., `ISocket`) with `TCPSocket` and `TLSSocket` implementations.~~
    - Decouple the HTTP protocol logic (request formatting, response parsing) from the main application flow. Create an `HttpClient` class.
 
 2. **Robust HTTP Handling:**
