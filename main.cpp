@@ -3,7 +3,7 @@
 #include <utility>
 #include <vector>
 #include <iostream>
-SSL_CTX* Socket::ssl_ctx = nullptr;
+SSL_CTX* SSLSocket::ssl_ctx = nullptr;
 int main()
 {
     {
@@ -30,7 +30,7 @@ int main()
         if (const auto locationHeader = http::ExtractLocationHeader(response)) {
             const std::string &location = *locationHeader;
             std::cout << "Extracted Location header: " << location << std::endl;
-            Socket redirectSocket;
+            SSLSocket redirectSocket;
             size_t hostStart = location.find("://");
             if (hostStart != std::string::npos) {
                 hostStart += 3;
@@ -53,9 +53,9 @@ int main()
     }
     }
 
-    if (Socket::ssl_ctx != nullptr) {
-        SSL_CTX_free(Socket::ssl_ctx);
-        Socket::ssl_ctx = nullptr;
+    if (SSLSocket::ssl_ctx != nullptr) {
+        SSL_CTX_free(SSLSocket::ssl_ctx);
+        SSLSocket::ssl_ctx = nullptr;
     }
 
     return 0;

@@ -21,7 +21,7 @@ The project currently consists of a simple HTTP client implemented in C++:
 
 ## Future Design Goals
 1. **Separation of Concerns:**
-   - Extract the SSL logic from the base `Socket` class. Consider creating an interface (e.g., `ISocket`) with `TCPSocket` and `TLSSocket` implementations.
+   - ~~Extract the SSL logic from the base `Socket` class. Consider creating an interface (e.g., `ISocket`) with `TCPSocket` and `TLSSocket` implementations.~~
    - Decouple the HTTP protocol logic (request formatting, response parsing) from the main application flow. Create an `HttpClient` class.
 
 2. **Robust HTTP Handling:**
