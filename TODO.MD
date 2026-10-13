@@ -38,4 +38,4 @@
 
 ## Tested lifecycle recovery (2026-09-07)
 
-Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.
+SSLSocket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.

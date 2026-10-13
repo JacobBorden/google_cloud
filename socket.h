@@ -10,6 +10,7 @@
 #include <openssl/ssl.h>
 #include <iostream>
 
+class SSLSocket;
 class Socket
 {
 public:
@@ -18,6 +19,11 @@ public:
         sockfd = socket(AF_INET, SOCK_STREAM, 0);
     }
     Socket(const Socket &) = delete;
+    Socket(SSLSocket &&) = delete;
+    Socket &operator=(SSLSocket &&) = delete;
+    Socket(const SSLSocket &) = delete;
+    Socket &operator=(const SSLSocket &) = delete;
+
     Socket(Socket &&other) noexcept : sockfd(other.sockfd), io_timeout_ms(other.io_timeout_ms)
     {
         other.sockfd = -1;
@@ -168,7 +174,7 @@ public:
         }
     }
     SSLSocket(const SSLSocket &) = delete;
-    SSLSocket(SSLSocket &&other) noexcept : Socket(std::move(other)), ssl(other.ssl)
+    SSLSocket(SSLSocket &&other) noexcept : Socket(static_cast<Socket&&>(other)), ssl(other.ssl)
     {
         other.ssl = nullptr;
     }
@@ -181,7 +187,7 @@ public:
             {
                 SSL_free(ssl);
             }
-            Socket::operator=(std::move(other));
+            Socket::operator=(static_cast<Socket&&>(other));
             ssl = other.ssl;
             other.ssl = nullptr;
         }

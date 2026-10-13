@@ -2,14 +2,14 @@
 
 ## Current Architecture
 The project currently consists of a simple HTTP client implemented in C++:
-- **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets and integrates OpenSSL to handle both plain TCP and TLS connections. It handles `connect`, `send`, and `receive` operations. Callers can set a socket send/receive timeout; DNS lookup and connection establishment remain blocking. SSL initialization is tied directly to the class instantiation.
+- **`Socket` and `SSLSocket` Classes (`socket.h`):** `Socket` wraps standard POSIX sockets for plain TCP connections. `SSLSocket` inherits from `Socket` to handle TLS connections using OpenSSL. Both handle `connect`, `send`, and `receive` operations. Callers can set a socket send/receive timeout; DNS lookup and connection establishment remain blocking. SSL initialization is tied directly to the `SSLSocket` instantiation.
 - **`httprequest` Struct (`httprequest.h`):** Stores a method, body, and caller-supplied request headers. It provides a `ToString` method to serialize an HTTP/1.1 request. The existing two-argument constructor still creates a POST request with content type and length.
 - **`main.cpp`:** Contains a demonstration of creating sockets, connecting to Google (which redirects), extracting an absolute `Location` response header, and following the redirect to the HTTPS endpoint. It releases the shared `Socket::ssl_ctx` after the socket objects have been destroyed.
 - **`http_response.h`:** Provides the currently narrow, offline-tested `Location` header extractor. It searches only a complete CRLF-delimited header section, recognizes the field name case-insensitively, and permits spaces or tabs after the colon; it is not a complete HTTP response parser.
 
 ## Class Responsibilities
-1. **`Socket`:**
-   - Resource management for the underlying file descriptor (`sockfd`) and OpenSSL connection (`ssl`).
+1. **`Socket` and `SSLSocket`:**
+   - Resource management for the underlying file descriptor (`sockfd`) in `Socket` and OpenSSL connection (`ssl`) in `SSLSocket`.
    - Resolution of hostnames to IP addresses using `getaddrinfo`.
    - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
    - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
@@ -33,7 +33,7 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Add bounded DNS resolution and connection establishment; make timeout errors distinguishable from EOF in `Receive`.
 
 4. **Resource Management:**
-   - `Socket` instances own their file descriptors and `SSL*` connections; `main` owns final cleanup of the shared `Socket::ssl_ctx` after all sockets are out of scope.
+   - `Socket` instances own their file descriptors. `SSLSocket` instances additionally own their `SSL*` connections. `main` owns final cleanup of the shared `SSLSocket::ssl_ctx` after all sockets are out of scope.
 
 ## Tested lifecycle recovery (2026-09-07)
 
