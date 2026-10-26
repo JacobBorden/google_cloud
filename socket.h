@@ -224,7 +224,13 @@ public:
         }
         if (ssl != nullptr) {
             std::string buffer(max_length, '\0');
-            int bytes_received = SSL_read(ssl, &buffer[0], buffer.size());
+            int bytes_received = 0;
+            if (flags & MSG_PEEK) {
+                bytes_received = SSL_peek(ssl, &buffer[0], buffer.size());
+            } else {
+                bytes_received = SSL_read(ssl, &buffer[0], buffer.size());
+            }
+
             if (bytes_received > 0)
             {
                 buffer.resize(bytes_received);
