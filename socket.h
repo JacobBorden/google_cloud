@@ -224,7 +224,14 @@ public:
         if (ssl != nullptr)
         {
             std::string buffer(max_length, '\0');
-            ssize_t bytes_received = SSL_read(ssl, &buffer[0], buffer.size());
+            ssize_t bytes_received;
+            if (flags == MSG_PEEK) {
+                bytes_received = SSL_peek(ssl, &buffer[0], buffer.size());
+            } else if (flags != 0) {
+                throw std::invalid_argument("Unsupported flags for SSL socket receive");
+            } else {
+                bytes_received = SSL_read(ssl, &buffer[0], buffer.size());
+            }
             if (bytes_received > 0)
             {
                 buffer.resize(bytes_received);
