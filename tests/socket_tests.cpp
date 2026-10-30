@@ -8,7 +8,6 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
-SSL_CTX *Socket::ssl_ctx = nullptr;
 void Check(bool ok) {
   if (!ok)
     throw std::runtime_error("check failed");
@@ -137,7 +136,7 @@ int main(int argc, char **argv) {
                           &length) == 0);
         Socket client;
         Check(client.Connect("127.0.0.1",
-                             std::to_string(ntohs(address.sin_port)), false) == 0);
+                             std::to_string(ntohs(address.sin_port))) == 0);
         Fd peer{accept(listener.value, nullptr, nullptr)};
         Check(peer.value >= 0);
         Check(client.Send("ping") == 4);
@@ -168,7 +167,7 @@ int main(int argc, char **argv) {
         Socket moved(std::move(client));
         Check(!client.isValid());
         Check(moved.Connect("127.0.0.1",
-                             std::to_string(ntohs(address.sin_port)), false) == 0);
+                             std::to_string(ntohs(address.sin_port))) == 0);
         Fd peer{accept(listener.value, nullptr, nullptr)};
         Check(peer.value >= 0);
         auto receive_timeout = [](Socket &socket) {
@@ -202,7 +201,5 @@ int main(int argc, char **argv) {
     std::cerr << e.what() << '\n';
     result = 1;
   }
-  SSL_CTX_free(Socket::ssl_ctx);
-  Socket::ssl_ctx = nullptr;
   return result;
 }
