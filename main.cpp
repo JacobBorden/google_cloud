@@ -1,9 +1,10 @@
 #include "http_response.h"
 #include "socket.h"
+#include "ssl_socket.h"
 #include <utility>
 #include <vector>
 #include <iostream>
-SSL_CTX* Socket::ssl_ctx = nullptr;
+SSL_CTX* SSLSocket::ssl_ctx = nullptr;
 int main()
 {
     {
@@ -16,7 +17,7 @@ int main()
     }
    
     Socket googleSocket;
-    if (googleSocket.Connect("www.google.com", "80", false) == 0){
+    if (googleSocket.Connect("www.google.com", "80") == 0){
         std::string httpRequest = "GET / HTTP/1.1\r\nHost: www.google.com\r\nConnection: close\r\n\r\n";
         googleSocket.Send(httpRequest);
         std::string response;
@@ -30,13 +31,13 @@ int main()
         if (const auto locationHeader = http::ExtractLocationHeader(response)) {
             const std::string &location = *locationHeader;
             std::cout << "Extracted Location header: " << location << std::endl;
-            Socket redirectSocket;
+            SSLSocket redirectSocket;
             size_t hostStart = location.find("://");
             if (hostStart != std::string::npos) {
                 hostStart += 3;
                 size_t hostEnd = location.find("/", hostStart);
                 std::string locationHost = location.substr(hostStart, hostEnd - hostStart);
-                if (redirectSocket.Connect(locationHost, "443", true) == 0)
+                if (redirectSocket.Connect(locationHost, "443") == 0)
                 {
                     std::string redirectRequest = "GET / HTTP/1.1\r\nHost: " + locationHost + "\r\nConnection: close\r\n\r\n";
                     redirectSocket.Send(redirectRequest);
@@ -53,9 +54,9 @@ int main()
     }
     }
 
-    if (Socket::ssl_ctx != nullptr) {
-        SSL_CTX_free(Socket::ssl_ctx);
-        Socket::ssl_ctx = nullptr;
+    if (SSLSocket::ssl_ctx != nullptr) {
+        SSL_CTX_free(SSLSocket::ssl_ctx);
+        SSLSocket::ssl_ctx = nullptr;
     }
 
     return 0;
