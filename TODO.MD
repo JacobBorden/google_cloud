@@ -38,4 +38,6 @@
 
 ## Tested lifecycle recovery (2026-09-07)
 
+Failed TLS handshakes now make `Connect` fail and release the attempted connection; a loopback plaintext peer covers this failure path. TLS peer verification and encrypted send/receive remain pending.
+
 Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.

@@ -107,8 +107,14 @@ public:
                 if (use_tls)
                 {
                     ssl = SSL_new(ssl_ctx);
-                    SSL_set_fd(ssl, sockfd);
-                    SSL_connect(ssl);
+                    if (ssl == nullptr || SSL_set_fd(ssl, sockfd) != 1 ||
+                        SSL_connect(ssl) != 1)
+                    {
+                        if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
+                        close(sockfd);
+                        sockfd = -1;
+                        continue;
+                    }
                 }
                 break; // Successfully connected
             }

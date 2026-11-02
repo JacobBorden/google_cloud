@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <dirent.h>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 SSL_CTX *Socket::ssl_ctx = nullptr;
@@ -196,6 +197,32 @@ int main(int argc, char **argv) {
         Check(rejected_negative);
       }
       Check(Fds() == count);
+    } else if (group == "tls_failure") {
+      const int count = Fds();
+      Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(listener.value >= 0);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+      Check(listen(listener.value, 1) == 0);
+      socklen_t length = sizeof(address);
+      Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
+                        &length) == 0);
+      std::thread peer([&] {
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        if (accepted.value >= 0)
+          send(accepted.value, "not TLS", 7, 0);
+      });
+      Socket client;
+      client.SetIoTimeout(1000);
+      const int result = client.Connect("127.0.0.1",
+                                        std::to_string(ntohs(address.sin_port)), true);
+      peer.join();
+      Check(result != 0);
+      Check(!client.isValid());
+      Check(Fds() == count + 1); // listener is still open
     } else
       throw std::runtime_error("unknown group");
   } catch (const std::exception &e) {
