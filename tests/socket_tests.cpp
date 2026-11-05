@@ -223,6 +223,42 @@ int main(int argc, char **argv) {
       Check(result != 0);
       Check(!client.isValid());
       Check(Fds() == count + 1); // listener is still open
+    } else if (group == "tls_verify") {
+      const int count = Fds();
+      const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+      const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+      const std::string ca = std::string(TEST_SOURCE_DIR) + "/tests/ca.crt";
+      for (int case_index = 0; case_index < 3; ++case_index) {
+        Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+        Check(listener.value >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+        Check(listen(listener.value, 1) == 0);
+        socklen_t length = sizeof(address);
+        Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+        std::thread peer([&] {
+          Fd accepted{accept(listener.value, nullptr, nullptr)};
+          SSL_CTX *context = SSL_CTX_new(TLS_server_method());
+          SSL_CTX_use_certificate_file(context, cert.c_str(), SSL_FILETYPE_PEM);
+          SSL_CTX_use_PrivateKey_file(context, key.c_str(), SSL_FILETYPE_PEM);
+          SSL *connection = SSL_new(context);
+          SSL_set_fd(connection, accepted.value);
+          SSL_accept(connection);
+          SSL_free(connection);
+          SSL_CTX_free(context);
+        });
+        Socket client;
+        client.SetIoTimeout(1000);
+        client.SetTlsPeerVerification(case_index == 1 ? "wrong.example" : "localhost",
+                                      case_index == 2 ? ca + ".missing" : ca);
+        const int connected = client.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
+        peer.join();
+        Check((connected == 0) == (case_index == 0));
+        if (connected != 0) Check(!client.isValid());
+      }
+      Check(Fds() == count);
     } else if (group == "tls_io") {
       const int count = Fds();
       Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
