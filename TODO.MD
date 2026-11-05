@@ -35,6 +35,7 @@
 4. **Missing features:**
    - No way to specify a timeout for `Connect`, `Send`, or `Receive`.
    - The `httprequest` struct is minimal and doesn't handle headers robustly.
+   - TLS peer certificate and hostname verification still need an explicit configuration contract and offline negative tests.
 
 ## Tested lifecycle recovery (2026-09-07)
 

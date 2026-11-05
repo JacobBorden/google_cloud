@@ -12,7 +12,7 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Resource management for the underlying file descriptor (`sockfd`) and OpenSSL connection (`ssl`).
    - Resolution of hostnames to IP addresses using `getaddrinfo`.
    - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
-   - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
+   - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading. Connected TLS sockets route application data through OpenSSL. TLS receives support ordinary reads and `MSG_PEEK`; other TLS send/receive flags are rejected because OpenSSL does not provide equivalent semantics.
    - Applying a millisecond I/O timeout to the underlying socket before or after `Connect`; this governs plaintext `Send` and `Receive`, but does not bound DNS lookup or blocking connection establishment. `Receive` currently returns an empty string for both timeout and EOF.
 
 2. **`httprequest`:**

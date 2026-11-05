@@ -1,11 +1,13 @@
 #ifndef SOCKET_H
 #define SOCKET_H
 #include <unistd.h>
+#include <algorithm>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <string>
 #include <cstring>
 #include <cerrno>
+#include <limits>
 #include <stdexcept>
 #include <openssl/ssl.h>
 #include <iostream>
@@ -152,6 +154,16 @@ public:
 
     ssize_t Send(const std::string &buf, int flags = 0)
     {
+        if (ssl != nullptr)
+        {
+            if (flags != 0)
+            {
+                throw std::invalid_argument("TLS Send does not support flags");
+            }
+            const size_t length = std::min(buf.size(),
+                                           static_cast<size_t>(std::numeric_limits<int>::max()));
+            return SSL_write(ssl, buf.data(), static_cast<int>(length));
+        }
         ssize_t bytes_sent = send(sockfd, buf.c_str(), buf.length(), flags);
         return bytes_sent;
     }
@@ -163,7 +175,28 @@ public:
             return "";
         }
         std::string buffer(max_length, '\0');
-        ssize_t bytes_received = recv(sockfd, &buffer[0], buffer.size(), flags);
+        ssize_t bytes_received;
+        if (ssl != nullptr)
+        {
+            const int length = static_cast<int>(std::min(
+                buffer.size(), static_cast<size_t>(std::numeric_limits<int>::max())));
+            if (flags == MSG_PEEK)
+            {
+                bytes_received = SSL_peek(ssl, buffer.data(), length);
+            }
+            else
+            {
+                if (flags != 0)
+                {
+                    throw std::invalid_argument("TLS Receive supports only MSG_PEEK");
+                }
+                bytes_received = SSL_read(ssl, buffer.data(), length);
+            }
+        }
+        else
+        {
+            bytes_received = recv(sockfd, buffer.data(), buffer.size(), flags);
+        }
         if (bytes_received > 0)
         {
             buffer.resize(bytes_received);
