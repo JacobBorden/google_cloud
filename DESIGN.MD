@@ -38,6 +38,6 @@ The project currently consists of a simple HTTP client implemented in C++:
 
 ## Tested lifecycle recovery (2026-09-07)
 
-`Connect` now checks TLS setup and handshake results and closes the attempted descriptor on failure. A local plaintext peer exercises the failure path. Successful TLS peer authentication and encrypted data I/O remain separate acceptance work.
+`Connect` now checks TLS setup and handshake results and closes the attempted descriptor on failure. Offline tests exercise a plaintext peer, opt-in certificate and hostname verification, and encrypted data I/O. These tests do not establish broader production TLS acceptance.
 
-Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.
+Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, loopback, and TLS tests are registered with CTest. See WORKFLOW.md.
