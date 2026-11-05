@@ -228,7 +228,7 @@ int main(int argc, char **argv) {
       const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
       const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
       const std::string ca = std::string(TEST_SOURCE_DIR) + "/tests/ca.crt";
-      for (int case_index = 0; case_index < 3; ++case_index) {
+      for (int case_index = 0; case_index < 4; ++case_index) {
         Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
         Check(listener.value >= 0);
         sockaddr_in address{};
@@ -252,7 +252,8 @@ int main(int argc, char **argv) {
         Socket client;
         client.SetIoTimeout(1000);
         client.SetTlsPeerVerification(case_index == 1 ? "wrong.example" : "localhost",
-                                      case_index == 2 ? ca + ".missing" : ca);
+                                      case_index == 2 ? ca + ".missing" :
+                                      case_index == 3 ? cert : ca);
         const int connected = client.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
         peer.join();
         Check((connected == 0) == (case_index == 0));
