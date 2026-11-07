@@ -83,6 +83,14 @@ public:
         tls_host = std::move(expected_host);
         tls_ca_file = std::move(ca_file);
     }
+    // Uses OpenSSL's configured default CA paths, including SSL_CERT_FILE.
+    void SetTlsPeerVerification(std::string expected_host)
+    {
+        if (expected_host.empty() || expected_host.find('\0') != std::string::npos)
+            throw std::invalid_argument("TLS host must be nonempty");
+        tls_host = std::move(expected_host);
+        tls_ca_file.clear();
+    }
     int Connect(const std::string &address, const std::string &service, bool use_tls)
     {
         if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
@@ -127,7 +135,8 @@ public:
                     {
                         X509_STORE *store = X509_STORE_new();
                         const bool configured = store != nullptr &&
-                            X509_STORE_load_file(store, tls_ca_file.c_str()) == 1 &&
+                            (tls_ca_file.empty() ? X509_STORE_set_default_paths(store) :
+                             X509_STORE_load_file(store, tls_ca_file.c_str())) == 1 &&
                             SSL_set1_verify_cert_store(ssl, store) == 1 &&
                             SSL_set1_host(ssl, tls_host.c_str()) == 1 &&
                             SSL_set_tlsext_host_name(ssl, tls_host.c_str()) == 1;

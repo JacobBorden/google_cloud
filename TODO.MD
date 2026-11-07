@@ -35,7 +35,7 @@
 4. **Missing features:**
    - No way to specify a timeout for `Connect`, `Send`, or `Receive`.
    - The `httprequest` struct is minimal and doesn't handle headers robustly.
-   - TLS peer certificate and hostname verification are opt-in through `SetTlsPeerVerification`, with offline trusted-host, wrong-host, missing-CA and untrusted-chain tests. A default trust-store policy and production TLS acceptance remain open.
+   - TLS peer certificate and hostname verification are opt-in through `SetTlsPeerVerification`, using either an explicit CA file or OpenSSL's default CA paths. Offline trusted-host, wrong-host, missing-CA, untrusted-chain and default-path tests cover these choices. Production TLS acceptance remains open.
 
 ## Tested lifecycle recovery (2026-09-07)
 
