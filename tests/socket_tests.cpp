@@ -4,8 +4,10 @@
 #include <arpa/inet.h>
 #include <chrono>
 #include <cerrno>
+#include <cstdlib>
 #include <dirent.h>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 SSL_CTX *Socket::ssl_ctx = nullptr;
@@ -196,6 +198,130 @@ int main(int argc, char **argv) {
         Check(rejected_negative);
       }
       Check(Fds() == count);
+    } else if (group == "tls_failure") {
+      const int count = Fds();
+      Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(listener.value >= 0);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+      Check(listen(listener.value, 1) == 0);
+      socklen_t length = sizeof(address);
+      Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
+                        &length) == 0);
+      std::thread peer([&] {
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        if (accepted.value >= 0)
+          send(accepted.value, "not TLS", 7, 0);
+      });
+      Socket client;
+      client.SetIoTimeout(1000);
+      const int result = client.Connect("127.0.0.1",
+                                        std::to_string(ntohs(address.sin_port)), true);
+      peer.join();
+      Check(result != 0);
+      Check(!client.isValid());
+      Check(Fds() == count + 1); // listener is still open
+    } else if (group == "tls_verify") {
+      const int count = Fds();
+      const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+      const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+      const std::string ca = std::string(TEST_SOURCE_DIR) + "/tests/ca.crt";
+      for (int case_index = 0; case_index < 6; ++case_index) {
+        Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+        Check(listener.value >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+        Check(listen(listener.value, 1) == 0);
+        socklen_t length = sizeof(address);
+        Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+        std::thread peer([&] {
+          Fd accepted{accept(listener.value, nullptr, nullptr)};
+          SSL_CTX *context = SSL_CTX_new(TLS_server_method());
+          SSL_CTX_use_certificate_file(context, cert.c_str(), SSL_FILETYPE_PEM);
+          SSL_CTX_use_PrivateKey_file(context, key.c_str(), SSL_FILETYPE_PEM);
+          SSL *connection = SSL_new(context);
+          SSL_set_fd(connection, accepted.value);
+          SSL_accept(connection);
+          SSL_free(connection);
+          SSL_CTX_free(context);
+        });
+        Socket client;
+        client.SetIoTimeout(1000);
+        if (case_index >= 4) {
+          Check(setenv("SSL_CERT_FILE", case_index == 4 ? ca.c_str() :
+                       (ca + ".missing").c_str(), 1) == 0);
+          Check(setenv("SSL_CERT_DIR", (ca + ".missing").c_str(), 1) == 0);
+          client.SetTlsPeerVerification("localhost");
+        } else {
+          client.SetTlsPeerVerification(case_index == 1 ? "wrong.example" : "localhost",
+                                        case_index == 2 ? ca + ".missing" :
+                                        case_index == 3 ? cert : ca);
+        }
+        const int connected = client.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
+        peer.join();
+        Check((connected == 0) == (case_index == 0 || case_index == 4));
+        if (connected != 0) Check(!client.isValid());
+      }
+      Check(unsetenv("SSL_CERT_FILE") == 0);
+      Check(unsetenv("SSL_CERT_DIR") == 0);
+      Check(Fds() == count);
+    } else if (group == "tls_io") {
+      const int count = Fds();
+      Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(listener.value >= 0);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+      Check(listen(listener.value, 1) == 0);
+      socklen_t length = sizeof(address);
+      Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
+                        &length) == 0);
+      std::thread peer([&] {
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        Check(accepted.value >= 0);
+        SSL_CTX *context = SSL_CTX_new(TLS_server_method());
+        Check(context != nullptr);
+        const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+        const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+        Check(SSL_CTX_use_certificate_file(context, cert.c_str(), SSL_FILETYPE_PEM) == 1);
+        Check(SSL_CTX_use_PrivateKey_file(context, key.c_str(), SSL_FILETYPE_PEM) == 1);
+        SSL *connection = SSL_new(context);
+        Check(connection != nullptr);
+        Check(SSL_set_fd(connection, accepted.value) == 1);
+        Check(SSL_accept(connection) == 1);
+        char request[4];
+        Check(SSL_read(connection, request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "ping");
+        Check(SSL_write(connection, "pong", 4) == 4);
+        SSL_free(connection);
+        SSL_CTX_free(context);
+      });
+      Socket client;
+      client.SetIoTimeout(1000);
+      Check(client.Connect("127.0.0.1",
+                           std::to_string(ntohs(address.sin_port)), true) == 0);
+      Check(client.Send("ping") == 4);
+      Check(client.Receive(MSG_PEEK, 4) == "pong");
+      Check(client.Receive(0, 4) == "pong");
+      auto rejects_flags = [](auto action) {
+        try {
+          action();
+        } catch (const std::invalid_argument &) {
+          return true;
+        }
+        return false;
+      };
+      Check(rejects_flags([&] { client.Send("x", MSG_DONTWAIT); }));
+      Check(rejects_flags([&] { client.Receive(MSG_WAITALL); }));
+      peer.join();
+      Check(Fds() == count + 2); // listener and connected client are still open
     } else
       throw std::runtime_error("unknown group");
   } catch (const std::exception &e) {

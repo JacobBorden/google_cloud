@@ -12,7 +12,8 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Resource management for the underlying file descriptor (`sockfd`) and OpenSSL connection (`ssl`).
    - Resolution of hostnames to IP addresses using `getaddrinfo`.
    - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
-   - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
+   - Callers may opt into TLS peer verification with an expected hostname and either a PEM CA file or OpenSSL's default CA paths. The per-connection trust store and hostname are checked during the handshake. The legacy default remains unverified for API compatibility.
+   - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading. Connected TLS sockets route application data through OpenSSL. TLS receives support ordinary reads and `MSG_PEEK`; other TLS send/receive flags are rejected because OpenSSL does not provide equivalent semantics.
    - Applying a millisecond I/O timeout to the underlying socket before or after `Connect`; this governs plaintext `Send` and `Receive`, but does not bound DNS lookup or blocking connection establishment. `Receive` currently returns an empty string for both timeout and EOF.
 
 2. **`httprequest`:**
@@ -37,4 +38,6 @@ The project currently consists of a simple HTTP client implemented in C++:
 
 ## Tested lifecycle recovery (2026-09-07)
 
-Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.
+`Connect` now checks TLS setup and handshake results and closes the attempted descriptor on failure. Offline tests exercise a plaintext peer, opt-in certificate and hostname verification, and encrypted data I/O. These tests do not establish broader production TLS acceptance.
+
+Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, loopback, and TLS tests are registered with CTest. See WORKFLOW.md.

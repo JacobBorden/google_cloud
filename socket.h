@@ -1,11 +1,14 @@
 #ifndef SOCKET_H
 #define SOCKET_H
 #include <unistd.h>
+#include <algorithm>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <string>
+#include <utility>
 #include <cstring>
 #include <cerrno>
+#include <limits>
 #include <stdexcept>
 #include <openssl/ssl.h>
 #include <iostream>
@@ -24,7 +27,7 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), io_timeout_ms(other.io_timeout_ms)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), io_timeout_ms(other.io_timeout_ms), tls_host(std::move(other.tls_host)), tls_ca_file(std::move(other.tls_ca_file))
     {
         other.sockfd = -1;
         other.ssl = nullptr;
@@ -49,6 +52,8 @@ public:
             other.ssl = nullptr;
             io_timeout_ms = other.io_timeout_ms;
             other.io_timeout_ms = 0;
+            tls_host = std::move(other.tls_host);
+            tls_ca_file = std::move(other.tls_ca_file);
         }
         return *this;
     }
@@ -66,6 +71,25 @@ public:
     bool isValid() const
     {
         return sockfd != -1;
+    }
+    // Enables certificate chain and hostname checks for subsequent TLS connections.
+    // The CA file is an explicit trust anchor; existing callers remain unverified.
+    void SetTlsPeerVerification(std::string expected_host, std::string ca_file)
+    {
+        if (expected_host.empty() || ca_file.empty() ||
+            expected_host.find('\0') != std::string::npos ||
+            ca_file.find('\0') != std::string::npos)
+            throw std::invalid_argument("TLS host and CA file must be nonempty");
+        tls_host = std::move(expected_host);
+        tls_ca_file = std::move(ca_file);
+    }
+    // Uses OpenSSL's configured default CA paths, including SSL_CERT_FILE.
+    void SetTlsPeerVerification(std::string expected_host)
+    {
+        if (expected_host.empty() || expected_host.find('\0') != std::string::npos)
+            throw std::invalid_argument("TLS host must be nonempty");
+        tls_host = std::move(expected_host);
+        tls_ca_file.clear();
     }
     int Connect(const std::string &address, const std::string &service, bool use_tls)
     {
@@ -107,8 +131,30 @@ public:
                 if (use_tls)
                 {
                     ssl = SSL_new(ssl_ctx);
-                    SSL_set_fd(ssl, sockfd);
-                    SSL_connect(ssl);
+                    if (ssl != nullptr && !tls_host.empty())
+                    {
+                        X509_STORE *store = X509_STORE_new();
+                        const bool configured = store != nullptr &&
+                            (tls_ca_file.empty() ? X509_STORE_set_default_paths(store) :
+                             X509_STORE_load_file(store, tls_ca_file.c_str())) == 1 &&
+                            SSL_set1_verify_cert_store(ssl, store) == 1 &&
+                            SSL_set1_host(ssl, tls_host.c_str()) == 1 &&
+                            SSL_set_tlsext_host_name(ssl, tls_host.c_str()) == 1;
+                        X509_STORE_free(store);
+                        if (!configured)
+                        {
+                            SSL_free(ssl); ssl = nullptr;
+                        }
+                        else SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
+                    }
+                    if (ssl == nullptr || SSL_set_fd(ssl, sockfd) != 1 ||
+                        SSL_connect(ssl) != 1)
+                    {
+                        if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
+                        close(sockfd);
+                        sockfd = -1;
+                        continue;
+                    }
                 }
                 break; // Successfully connected
             }
@@ -146,6 +192,16 @@ public:
 
     ssize_t Send(const std::string &buf, int flags = 0)
     {
+        if (ssl != nullptr)
+        {
+            if (flags != 0)
+            {
+                throw std::invalid_argument("TLS Send does not support flags");
+            }
+            const size_t length = std::min(buf.size(),
+                                           static_cast<size_t>(std::numeric_limits<int>::max()));
+            return SSL_write(ssl, buf.data(), static_cast<int>(length));
+        }
         ssize_t bytes_sent = send(sockfd, buf.c_str(), buf.length(), flags);
         return bytes_sent;
     }
@@ -157,7 +213,28 @@ public:
             return "";
         }
         std::string buffer(max_length, '\0');
-        ssize_t bytes_received = recv(sockfd, &buffer[0], buffer.size(), flags);
+        ssize_t bytes_received;
+        if (ssl != nullptr)
+        {
+            const int length = static_cast<int>(std::min(
+                buffer.size(), static_cast<size_t>(std::numeric_limits<int>::max())));
+            if (flags == MSG_PEEK)
+            {
+                bytes_received = SSL_peek(ssl, buffer.data(), length);
+            }
+            else
+            {
+                if (flags != 0)
+                {
+                    throw std::invalid_argument("TLS Receive supports only MSG_PEEK");
+                }
+                bytes_received = SSL_read(ssl, buffer.data(), length);
+            }
+        }
+        else
+        {
+            bytes_received = recv(sockfd, buffer.data(), buffer.size(), flags);
+        }
         if (bytes_received > 0)
         {
             buffer.resize(bytes_received);
@@ -177,6 +254,8 @@ private:
     
     SSL *ssl = nullptr;
     int io_timeout_ms = 0;
+    std::string tls_host;
+    std::string tls_ca_file;
 };
 
 #endif // SOCKET_H

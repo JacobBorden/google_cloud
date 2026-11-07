@@ -35,7 +35,10 @@
 4. **Missing features:**
    - No way to specify a timeout for `Connect`, `Send`, or `Receive`.
    - The `httprequest` struct is minimal and doesn't handle headers robustly.
+   - TLS peer certificate and hostname verification are opt-in through `SetTlsPeerVerification`, using either an explicit CA file or OpenSSL's default CA paths. Offline trusted-host, wrong-host, missing-CA, untrusted-chain and default-path tests cover these choices. Production TLS acceptance remains open.
 
 ## Tested lifecycle recovery (2026-09-07)
+
+Failed TLS handshakes now make `Connect` fail and release the attempted connection; a loopback plaintext peer covers this failure path. TLS peer verification and encrypted send/receive remain pending.
 
 Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.
