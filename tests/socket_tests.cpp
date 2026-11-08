@@ -229,7 +229,7 @@ int main(int argc, char **argv) {
       const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
       const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
       const std::string ca = std::string(TEST_SOURCE_DIR) + "/tests/ca.crt";
-      for (int case_index = 0; case_index < 6; ++case_index) {
+      for (int case_index = 0; case_index < 8; ++case_index) {
         Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
         Check(listener.value >= 0);
         sockaddr_in address{};
@@ -242,8 +242,12 @@ int main(int argc, char **argv) {
         std::thread peer([&] {
           Fd accepted{accept(listener.value, nullptr, nullptr)};
           SSL_CTX *context = SSL_CTX_new(TLS_server_method());
-          SSL_CTX_use_certificate_file(context, cert.c_str(), SSL_FILETYPE_PEM);
-          SSL_CTX_use_PrivateKey_file(context, key.c_str(), SSL_FILETYPE_PEM);
+          const std::string server_cert = case_index == 6 ?
+              std::string(TEST_SOURCE_DIR) + "/tests/ip-server.crt" : cert;
+          const std::string server_key = case_index == 6 ?
+              std::string(TEST_SOURCE_DIR) + "/tests/ip-server.key" : key;
+          SSL_CTX_use_certificate_file(context, server_cert.c_str(), SSL_FILETYPE_PEM);
+          SSL_CTX_use_PrivateKey_file(context, server_key.c_str(), SSL_FILETYPE_PEM);
           SSL *connection = SSL_new(context);
           SSL_set_fd(connection, accepted.value);
           SSL_accept(connection);
@@ -252,7 +256,10 @@ int main(int argc, char **argv) {
         });
         Socket client;
         client.SetIoTimeout(1000);
-        if (case_index >= 4) {
+        if (case_index == 6 || case_index == 7) {
+          client.SetTlsPeerVerification("127.0.0.1", case_index == 6 ?
+              std::string(TEST_SOURCE_DIR) + "/tests/ip-server.crt" : ca);
+        } else if (case_index >= 4) {
           Check(setenv("SSL_CERT_FILE", case_index == 4 ? ca.c_str() :
                        (ca + ".missing").c_str(), 1) == 0);
           Check(setenv("SSL_CERT_DIR", (ca + ".missing").c_str(), 1) == 0);
@@ -264,7 +271,7 @@ int main(int argc, char **argv) {
         }
         const int connected = client.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
         peer.join();
-        Check((connected == 0) == (case_index == 0 || case_index == 4));
+        Check((connected == 0) == (case_index == 0 || case_index == 4 || case_index == 6));
         if (connected != 0) Check(!client.isValid());
       }
       Check(unsetenv("SSL_CERT_FILE") == 0);

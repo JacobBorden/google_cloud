@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 #include <string>
 #include <utility>
 #include <cstring>
@@ -134,12 +135,17 @@ public:
                     if (ssl != nullptr && !tls_host.empty())
                     {
                         X509_STORE *store = X509_STORE_new();
+                        in_addr ipv4{};
+                        in6_addr ipv6{};
+                        const bool ip_host = inet_pton(AF_INET, tls_host.c_str(), &ipv4) == 1 ||
+                                             inet_pton(AF_INET6, tls_host.c_str(), &ipv6) == 1;
                         const bool configured = store != nullptr &&
                             (tls_ca_file.empty() ? X509_STORE_set_default_paths(store) :
                              X509_STORE_load_file(store, tls_ca_file.c_str())) == 1 &&
                             SSL_set1_verify_cert_store(ssl, store) == 1 &&
-                            SSL_set1_host(ssl, tls_host.c_str()) == 1 &&
-                            SSL_set_tlsext_host_name(ssl, tls_host.c_str()) == 1;
+                            (ip_host ? X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), tls_host.c_str()) == 1 :
+                             (SSL_set1_host(ssl, tls_host.c_str()) == 1 &&
+                              SSL_set_tlsext_host_name(ssl, tls_host.c_str()) == 1));
                         X509_STORE_free(store);
                         if (!configured)
                         {
