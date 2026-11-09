@@ -138,6 +138,7 @@ int main(int argc, char **argv) {
                           reinterpret_cast<sockaddr *>(&address),
                           &length) == 0);
         Socket client;
+        client.SetConnectTimeout(1000);
         Check(client.Connect("127.0.0.1",
                              std::to_string(ntohs(address.sin_port)), false) == 0);
         Fd peer{accept(listener.value, nullptr, nullptr)};
@@ -150,6 +151,26 @@ int main(int argc, char **argv) {
         Check(shutdown(peer.value, SHUT_WR) == 0);
         Check(client.Receive(0, 0).empty());
         Check(client.Receive(MSG_WAITALL) == "pong");
+      }
+      Check(Fds() == count);
+      {
+        Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+        Check(listener.value >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+        socklen_t length = sizeof(address);
+        Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+        Socket client;
+        client.SetConnectTimeout(100);
+        Socket moved(std::move(client));
+        Check(moved.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), false) != 0);
+        Check(!moved.isValid());
+        bool rejected = false;
+        try { moved.SetConnectTimeout(-1); }
+        catch (const std::invalid_argument &) { rejected = true; }
+        Check(rejected);
       }
       Check(Fds() == count);
       {

@@ -5,6 +5,8 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <string>
 #include <utility>
 #include <cstring>
@@ -28,11 +30,12 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), io_timeout_ms(other.io_timeout_ms), tls_host(std::move(other.tls_host)), tls_ca_file(std::move(other.tls_ca_file))
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), io_timeout_ms(other.io_timeout_ms), connect_timeout_ms(other.connect_timeout_ms), tls_host(std::move(other.tls_host)), tls_ca_file(std::move(other.tls_ca_file))
     {
         other.sockfd = -1;
         other.ssl = nullptr;
         other.io_timeout_ms = 0;
+        other.connect_timeout_ms = 0;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
@@ -53,6 +56,8 @@ public:
             other.ssl = nullptr;
             io_timeout_ms = other.io_timeout_ms;
             other.io_timeout_ms = 0;
+            connect_timeout_ms = other.connect_timeout_ms;
+            other.connect_timeout_ms = 0;
             tls_host = std::move(other.tls_host);
             tls_ca_file = std::move(other.tls_ca_file);
         }
@@ -126,7 +131,7 @@ public:
                 }
             }
 
-            int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
+            int success = ConnectTcp(sockfd, p->ai_addr, p->ai_addrlen, connect_timeout_ms);
             if (success == 0)
             {
                 if (use_tls)
@@ -196,6 +201,14 @@ public:
         io_timeout_ms = timeout_ms;
     }
 
+    // Bounds TCP establishment per resolved address; DNS and TLS handshake remain separate.
+    void SetConnectTimeout(int timeout_ms)
+    {
+        if (timeout_ms < 0)
+            throw std::invalid_argument("Connect timeout must be nonnegative");
+        connect_timeout_ms = timeout_ms;
+    }
+
     ssize_t Send(const std::string &buf, int flags = 0)
     {
         if (ssl != nullptr)
@@ -250,6 +263,33 @@ public:
     }
 static SSL_CTX *ssl_ctx;
 private:
+    static int ConnectTcp(int fd, const sockaddr *address, socklen_t length, int timeout_ms)
+    {
+        if (timeout_ms == 0) return connect(fd, address, length);
+        const int original_flags = fcntl(fd, F_GETFL);
+        if (original_flags == -1 || fcntl(fd, F_SETFL, original_flags | O_NONBLOCK) == -1)
+            return -1;
+        int result = connect(fd, address, length);
+        if (result == -1 && errno == EINPROGRESS)
+        {
+            pollfd ready{fd, POLLOUT, 0};
+            result = poll(&ready, 1, timeout_ms);
+            if (result > 0)
+            {
+                int socket_error = 0;
+                socklen_t error_length = sizeof(socket_error);
+                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_length) == -1)
+                    result = -1;
+                else if (socket_error != 0) { errno = socket_error; result = -1; }
+                else result = 0;
+            }
+            else if (result == 0) { errno = ETIMEDOUT; result = -1; }
+        }
+        const int saved_errno = errno;
+        if (fcntl(fd, F_SETFL, original_flags) == -1) return -1;
+        errno = saved_errno;
+        return result;
+    }
     static bool ApplyIoTimeout(int fd, int timeout_ms)
     {
         const struct timeval tv{timeout_ms / 1000, (timeout_ms % 1000) * 1000};
@@ -260,6 +300,7 @@ private:
     
     SSL *ssl = nullptr;
     int io_timeout_ms = 0;
+    int connect_timeout_ms = 0;
     std::string tls_host;
     std::string tls_ca_file;
 };
