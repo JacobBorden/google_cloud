@@ -2,16 +2,17 @@
 
 ## Current Architecture
 The project currently consists of a simple HTTP client implemented in C++:
-- **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets and integrates OpenSSL to handle both plain TCP and TLS connections. It handles `connect`, `send`, and `receive` operations. Callers can set a socket send/receive timeout; DNS lookup and connection establishment remain blocking. SSL initialization is tied directly to the class instantiation.
+- **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets for plain TCP connections. It handles `connect`, `send`, and `receive` operations. Callers can set a socket send/receive timeout; DNS lookup and connection establishment remain blocking.
+- **`SSLSocket` Class (`socket.h`):** Derived from `Socket`, integrates OpenSSL to handle TLS connections. SSL initialization is tied directly to the class instantiation.
 - **`httprequest` Struct (`httprequest.h`):** Stores a method, body, and caller-supplied request headers. It provides a `ToString` method to serialize an HTTP/1.1 request. The existing two-argument constructor still creates a POST request with content type and length.
 - **`main.cpp`:** Contains a demonstration of creating sockets, connecting to Google (which redirects), extracting an absolute `Location` response header, and following the redirect to the HTTPS endpoint. It releases the shared `Socket::ssl_ctx` after the socket objects have been destroyed.
 - **`http_response.h`:** Provides the currently narrow, offline-tested `Location` header extractor. It searches only a complete CRLF-delimited header section, recognizes the field name case-insensitively, and permits spaces or tabs after the colon; it is not a complete HTTP response parser.
 
 ## Class Responsibilities
-1. **`Socket`:**
-   - Resource management for the underlying file descriptor (`sockfd`) and OpenSSL connection (`ssl`).
+1. **`Socket` & `SSLSocket`:**
+   - `Socket` manages the resource for the underlying file descriptor (`sockfd`), while `SSLSocket` manages the OpenSSL connection (`ssl`).
    - Resolution of hostnames to IP addresses using `getaddrinfo`.
-   - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
+   - Establishing connections. `SSLSocket` handles TLS handshakes.
    - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
    - Applying a millisecond I/O timeout to the underlying socket before or after `Connect`; this governs plaintext `Send` and `Receive`, but does not bound DNS lookup or blocking connection establishment. `Receive` currently returns an empty string for both timeout and EOF.
 
