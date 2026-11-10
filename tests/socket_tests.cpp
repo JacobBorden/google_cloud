@@ -219,6 +219,36 @@ int main(int argc, char **argv) {
         Check(rejected_negative);
       }
       Check(Fds() == count);
+    } else if (group == "tls_timeout") {
+      const int count = Fds();
+      Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(listener.value >= 0);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+      Check(listen(listener.value, 1) == 0);
+      socklen_t length = sizeof(address);
+      Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+      std::thread peer([&] {
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        Check(accepted.value >= 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+      });
+      Socket client;
+      client.SetTlsHandshakeTimeout(100);
+      Socket moved(std::move(client));
+      const auto start = std::chrono::steady_clock::now();
+      const int connected = moved.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
+      const auto elapsed = std::chrono::steady_clock::now() - start;
+      Check(connected != 0 && !moved.isValid());
+      Check(elapsed < std::chrono::milliseconds(1500));
+      peer.join();
+      Check(Fds() == count + 1);
+      bool rejected = false;
+      try { client.SetTlsHandshakeTimeout(-1); }
+      catch (const std::invalid_argument &) { rejected = true; }
+      Check(rejected);
     } else if (group == "tls_failure") {
       const int count = Fds();
       Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
