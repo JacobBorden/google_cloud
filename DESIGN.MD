@@ -2,20 +2,26 @@
 
 ## Current Architecture
 The project currently consists of a simple HTTP client implemented in C++:
-- **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets and integrates OpenSSL to handle both plain TCP and TLS connections. It handles `connect`, `send`, and `receive` operations. Callers can set a socket send/receive timeout; DNS lookup and connection establishment remain blocking. SSL initialization is tied directly to the class instantiation.
+- **`Socket` Class (`socket.h`):** Wraps standard POSIX sockets to handle plain TCP connections. It handles `connect`, `send`, and `receive` operations. Callers can set a socket send/receive timeout; DNS lookup and connection establishment remain blocking.
+- **`SSLSocket` Class (`sslsocket.h`):** Derives from `Socket` to handle TLS connections using OpenSSL. OpenSSL initialization and cleanup are managed within this class.
 - **`httprequest` Struct (`httprequest.h`):** Stores a method, body, and caller-supplied request headers. It provides a `ToString` method to serialize an HTTP/1.1 request. The existing two-argument constructor still creates a POST request with content type and length.
 - **`main.cpp`:** Contains a demonstration of creating sockets, connecting to Google (which redirects), extracting an absolute `Location` response header, and following the redirect to the HTTPS endpoint. It releases the shared `Socket::ssl_ctx` after the socket objects have been destroyed.
 - **`http_response.h`:** Provides the currently narrow, offline-tested `Location` header extractor. It searches only a complete CRLF-delimited header section, recognizes the field name case-insensitively, and permits spaces or tabs after the colon; it is not a complete HTTP response parser.
 
 ## Class Responsibilities
 1. **`Socket`:**
-   - Resource management for the underlying file descriptor (`sockfd`) and OpenSSL connection (`ssl`).
+   - Resource management for the underlying file descriptor (`sockfd`).
    - Resolution of hostnames to IP addresses using `getaddrinfo`.
-   - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
-   - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
+   - Establishing connections.
+   - Reading and writing plaintext data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading.
    - Applying a millisecond I/O timeout to the underlying socket before or after `Connect`; this governs plaintext `Send` and `Receive`, but does not bound DNS lookup or blocking connection establishment. `Receive` currently returns an empty string for both timeout and EOF.
 
-2. **`httprequest`:**
+2. **`SSLSocket`:**
+   - Inherits from `Socket`.
+   - Resource management for the OpenSSL connection (`ssl`).
+   - Overrides `Connect`, `Send`, and `Receive` to encrypt data in transit using TLS.
+
+3. **`httprequest`:**
    - Storing the request method, arbitrary headers, and body.
    - Formatting an HTTP/1.1 request string, with a default `Connection: close` unless the caller supplies that header in any case spelling. A nonempty body gets a computed `Content-Length` unless the caller supplies length or transfer framing. The serializer owns the single `Host` header and rejects caller-supplied duplicates, empty hosts, and host whitespace. Request methods and header names must be tokens; control characters in header values, host, and request target are rejected to prevent line injection. Caller-supplied framing values are not checked against the body.
 
@@ -33,7 +39,7 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Add bounded DNS resolution and connection establishment; make timeout errors distinguishable from EOF in `Receive`.
 
 4. **Resource Management:**
-   - `Socket` instances own their file descriptors and `SSL*` connections; `main` owns final cleanup of the shared `Socket::ssl_ctx` after all sockets are out of scope.
+   - `Socket` instances own their file descriptors; `SSLSocket` instances own their `SSL*` connections. `main` owns final cleanup of the shared `SSLSocket::ssl_ctx` after all sockets are out of scope.
 
 ## Tested lifecycle recovery (2026-09-07)
 
