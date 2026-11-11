@@ -14,7 +14,7 @@ The project currently consists of a simple HTTP client implemented in C++:
    - Establishing connections with an explicit caller-selected TLS mode, rather than inferring TLS from a port string.
    - Callers may opt into TLS peer verification with an expected DNS hostname or IP address and either a PEM CA file or OpenSSL's default CA paths. The per-connection trust store and DNS or IP certificate identity are checked during the handshake; SNI is sent for DNS names. The legacy default remains unverified for API compatibility.
    - Reading and writing data to/from the socket; callers can set the maximum receive length, and a zero length returns an empty result without reading. Connected TLS sockets route application data through OpenSSL. TLS receives support ordinary reads and `MSG_PEEK`; other TLS send/receive flags are rejected because OpenSSL does not provide equivalent semantics.
-   - Applying a millisecond I/O timeout to the underlying socket before or after `Connect`; this governs plaintext `Send` and `Receive`. Optional connection and TLS handshake timeouts use nonblocking I/O and poll; they do not bound DNS lookup. `Receive` currently returns an empty string for both timeout and EOF.
+   - Applying a millisecond I/O timeout to the underlying socket before or after `Connect`; this governs plaintext `Send` and `Receive`. Optional connection and TLS handshake timeouts use nonblocking I/O and poll; interrupted TCP readiness waits retry against the original deadline. They do not bound DNS lookup. `Receive` currently returns an empty string for both timeout and EOF.
 
 2. **`httprequest`:**
    - Storing the request method, arbitrary headers, and body.

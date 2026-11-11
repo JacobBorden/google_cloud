@@ -33,7 +33,7 @@
    - It would be better to abstract the SSL layer or create a specialized `SSLSocket` class.
 
 4. **Missing features:**
-   - `SetConnectTimeout` bounds each TCP address attempt; `SetTlsHandshakeTimeout` bounds the subsequent TLS handshake when enabled. DNS lookup remains unbounded. `SetIoTimeout` covers socket send/receive but timeout and EOF are not distinguished by `Receive`.
+   - `SetConnectTimeout` bounds each TCP address attempt, including interrupted readiness waits; `SetTlsHandshakeTimeout` bounds the subsequent TLS handshake when enabled. DNS lookup remains unbounded. `SetIoTimeout` covers socket send/receive but timeout and EOF are not distinguished by `Receive`.
    - The `httprequest` struct is minimal and doesn't handle headers robustly.
    - TLS peer certificate and DNS/IP identity verification are opt-in through `SetTlsPeerVerification`, using either an explicit CA file or OpenSSL's default CA paths. Offline trusted-host, wrong-host, IP SAN match/mismatch, missing-CA, untrusted-chain and default-path tests cover these choices. Production TLS acceptance remains open.
 

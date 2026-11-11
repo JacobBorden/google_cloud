@@ -312,8 +312,16 @@ private:
         int result = connect(fd, address, length);
         if (result == -1 && errno == EINPROGRESS)
         {
-            pollfd ready{fd, POLLOUT, 0};
-            result = poll(&ready, 1, timeout_ms);
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
+            do
+            {
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+                if (remaining <= 0) { errno = ETIMEDOUT; result = -1; break; }
+                pollfd ready{fd, POLLOUT, 0};
+                result = poll(&ready, 1, static_cast<int>(remaining));
+            } while (result == -1 && errno == EINTR);
             if (result > 0)
             {
                 int socket_error = 0;
