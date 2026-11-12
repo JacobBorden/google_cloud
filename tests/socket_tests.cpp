@@ -4,8 +4,10 @@
 #include <arpa/inet.h>
 #include <chrono>
 #include <cerrno>
+#include <csignal>
 #include <cstdlib>
 #include <dirent.h>
+#include <pthread.h>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -32,6 +34,8 @@ struct Fd {
       close(value);
   }
 };
+volatile std::sig_atomic_t handshake_signals = 0;
+void MarkHandshakeSignal(int) { handshake_signals = 1; }
 int main(int argc, char **argv) {
   int result = 0;
   try {
@@ -220,6 +224,11 @@ int main(int argc, char **argv) {
       }
       Check(Fds() == count);
     } else if (group == "tls_timeout") {
+      struct sigaction action{};
+      action.sa_handler = MarkHandshakeSignal;
+      struct sigaction old_action{};
+      Check(sigaction(SIGUSR1, &action, &old_action) == 0);
+      const pthread_t client_thread = pthread_self();
       const int count = Fds();
       Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
       Check(listener.value >= 0);
@@ -233,7 +242,9 @@ int main(int argc, char **argv) {
       std::thread peer([&] {
         Fd accepted{accept(listener.value, nullptr, nullptr)};
         Check(accepted.value >= 0);
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        Check(pthread_kill(client_thread, SIGUSR1) == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(375));
       });
       Socket client;
       client.SetTlsHandshakeTimeout(100);
@@ -242,8 +253,11 @@ int main(int argc, char **argv) {
       const int connected = moved.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
       const auto elapsed = std::chrono::steady_clock::now() - start;
       Check(connected != 0 && !moved.isValid());
+      Check(elapsed >= std::chrono::milliseconds(75));
       Check(elapsed < std::chrono::milliseconds(1500));
       peer.join();
+      Check(sigaction(SIGUSR1, &old_action, nullptr) == 0);
+      Check(handshake_signals == 1);
       Check(Fds() == count + 1);
       bool rejected = false;
       try { client.SetTlsHandshakeTimeout(-1); }
