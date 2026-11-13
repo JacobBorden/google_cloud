@@ -259,6 +259,29 @@ int main(int argc, char **argv) {
       Check(sigaction(SIGUSR1, &old_action, nullptr) == 0);
       Check(handshake_signals == 1);
       Check(Fds() == count + 1);
+      Fd recovery_listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(recovery_listener.value >= 0);
+      sockaddr_in recovery_address{};
+      recovery_address.sin_family = AF_INET;
+      recovery_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(recovery_listener.value,
+                 reinterpret_cast<sockaddr *>(&recovery_address),
+                 sizeof(recovery_address)) == 0);
+      Check(listen(recovery_listener.value, 1) == 0);
+      socklen_t recovery_length = sizeof(recovery_address);
+      Check(getsockname(recovery_listener.value,
+                        reinterpret_cast<sockaddr *>(&recovery_address),
+                        &recovery_length) == 0);
+      Check(moved.Connect("127.0.0.1",
+                          std::to_string(ntohs(recovery_address.sin_port)), false) == 0);
+      Fd recovery_peer{accept(recovery_listener.value, nullptr, nullptr)};
+      Check(recovery_peer.value >= 0);
+      Check(moved.Send("ok") == 2);
+      char recovery_buffer[2];
+      Check(recv(recovery_peer.value, recovery_buffer, sizeof(recovery_buffer),
+                 MSG_WAITALL) == 2);
+      Check(std::string(recovery_buffer, sizeof(recovery_buffer)) == "ok");
+      Check(moved.isValid());
       bool rejected = false;
       try { client.SetTlsHandshakeTimeout(-1); }
       catch (const std::invalid_argument &) { rejected = true; }
