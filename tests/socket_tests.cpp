@@ -282,6 +282,42 @@ int main(int argc, char **argv) {
                  MSG_WAITALL) == 2);
       Check(std::string(recovery_buffer, sizeof(recovery_buffer)) == "ok");
       Check(moved.isValid());
+      // A timed-out handshake must also leave the Socket reusable for TLS.
+      moved.SetTlsHandshakeTimeout(1000);
+      Fd tls_listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(tls_listener.value >= 0);
+      sockaddr_in tls_address{};
+      tls_address.sin_family = AF_INET;
+      tls_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(tls_listener.value, reinterpret_cast<sockaddr *>(&tls_address),
+                 sizeof(tls_address)) == 0);
+      Check(listen(tls_listener.value, 1) == 0);
+      socklen_t tls_length = sizeof(tls_address);
+      Check(getsockname(tls_listener.value,
+                        reinterpret_cast<sockaddr *>(&tls_address), &tls_length) == 0);
+      std::thread tls_peer([&] {
+        Fd accepted{accept(tls_listener.value, nullptr, nullptr)};
+        Check(accepted.value >= 0);
+        SSL_CTX *context = SSL_CTX_new(TLS_server_method());
+        Check(context != nullptr);
+        const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+        const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+        Check(SSL_CTX_use_certificate_file(context, cert.c_str(), SSL_FILETYPE_PEM) == 1);
+        Check(SSL_CTX_use_PrivateKey_file(context, key.c_str(), SSL_FILETYPE_PEM) == 1);
+        SSL *connection = SSL_new(context);
+        Check(connection != nullptr);
+        Check(SSL_set_fd(connection, accepted.value) == 1);
+        Check(SSL_accept(connection) == 1);
+        char request[2];
+        Check(SSL_read(connection, request, sizeof(request)) == 2);
+        Check(std::string(request, sizeof(request)) == "ok");
+        SSL_free(connection);
+        SSL_CTX_free(context);
+      });
+      Check(moved.Connect("127.0.0.1", std::to_string(ntohs(tls_address.sin_port)), true) == 0);
+      Check(moved.Send("ok") == 2);
+      tls_peer.join();
+      Check(moved.isValid());
       bool rejected = false;
       try { client.SetTlsHandshakeTimeout(-1); }
       catch (const std::invalid_argument &) { rejected = true; }
