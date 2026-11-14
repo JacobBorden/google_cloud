@@ -33,9 +33,12 @@
    - It would be better to abstract the SSL layer or create a specialized `SSLSocket` class.
 
 4. **Missing features:**
-   - No way to specify a timeout for `Connect`, `Send`, or `Receive`.
+   - `SetConnectTimeout` bounds each TCP address attempt, including interrupted readiness waits; `SetTlsHandshakeTimeout` bounds the subsequent TLS handshake when enabled. DNS lookup remains unbounded. `SetIoTimeout` covers socket send/receive but timeout and EOF are not distinguished by `Receive`.
    - The `httprequest` struct is minimal and doesn't handle headers robustly.
+   - TLS peer certificate and DNS/IP identity verification are opt-in through `SetTlsPeerVerification`, using either an explicit CA file or OpenSSL's default CA paths. Offline trusted-host, wrong-host, IP SAN match/mismatch, missing-CA, untrusted-chain and default-path tests cover these choices. Production TLS acceptance remains open.
 
 ## Tested lifecycle recovery (2026-09-07)
+
+Failed TLS handshakes now make `Connect` fail and release the attempted connection; a loopback plaintext peer covers this failure path. TLS peer verification and encrypted send/receive remain pending.
 
 Socket moves now transfer SSL ownership; reconnect closes previous resources and failed connection attempts clear the descriptor. Offline request, move/destruction, and loopback tests are registered with CTest. TLS peer verification and use of SSL_read/SSL_write remain pending. See WORKFLOW.md.

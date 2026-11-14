@@ -1,11 +1,18 @@
 #ifndef SOCKET_H
 #define SOCKET_H
 #include <unistd.h>
+#include <algorithm>
+#include <chrono>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <string>
+#include <utility>
 #include <cstring>
 #include <cerrno>
+#include <limits>
 #include <stdexcept>
 #include <openssl/ssl.h>
 #include <iostream>
@@ -24,11 +31,13 @@ public:
         }
     }
     Socket(const Socket &) = delete;
-    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), io_timeout_ms(other.io_timeout_ms)
+    Socket(Socket &&other) noexcept : sockfd(other.sockfd), ssl(other.ssl), io_timeout_ms(other.io_timeout_ms), connect_timeout_ms(other.connect_timeout_ms), tls_handshake_timeout_ms(other.tls_handshake_timeout_ms), tls_host(std::move(other.tls_host)), tls_ca_file(std::move(other.tls_ca_file))
     {
         other.sockfd = -1;
         other.ssl = nullptr;
         other.io_timeout_ms = 0;
+        other.connect_timeout_ms = 0;
+        other.tls_handshake_timeout_ms = 0;
     }
     Socket &operator=(const Socket &) = delete;
     Socket &operator=(Socket &&other) noexcept
@@ -49,6 +58,12 @@ public:
             other.ssl = nullptr;
             io_timeout_ms = other.io_timeout_ms;
             other.io_timeout_ms = 0;
+            connect_timeout_ms = other.connect_timeout_ms;
+            other.connect_timeout_ms = 0;
+            tls_handshake_timeout_ms = other.tls_handshake_timeout_ms;
+            other.tls_handshake_timeout_ms = 0;
+            tls_host = std::move(other.tls_host);
+            tls_ca_file = std::move(other.tls_ca_file);
         }
         return *this;
     }
@@ -66,6 +81,25 @@ public:
     bool isValid() const
     {
         return sockfd != -1;
+    }
+    // Enables certificate chain and hostname checks for subsequent TLS connections.
+    // The CA file is an explicit trust anchor; existing callers remain unverified.
+    void SetTlsPeerVerification(std::string expected_host, std::string ca_file)
+    {
+        if (expected_host.empty() || ca_file.empty() ||
+            expected_host.find('\0') != std::string::npos ||
+            ca_file.find('\0') != std::string::npos)
+            throw std::invalid_argument("TLS host and CA file must be nonempty");
+        tls_host = std::move(expected_host);
+        tls_ca_file = std::move(ca_file);
+    }
+    // Uses OpenSSL's configured default CA paths, including SSL_CERT_FILE.
+    void SetTlsPeerVerification(std::string expected_host)
+    {
+        if (expected_host.empty() || expected_host.find('\0') != std::string::npos)
+            throw std::invalid_argument("TLS host must be nonempty");
+        tls_host = std::move(expected_host);
+        tls_ca_file.clear();
     }
     int Connect(const std::string &address, const std::string &service, bool use_tls)
     {
@@ -101,14 +135,41 @@ public:
                 }
             }
 
-            int success = connect(sockfd, p->ai_addr, p->ai_addrlen);
+            int success = ConnectTcp(sockfd, p->ai_addr, p->ai_addrlen, connect_timeout_ms);
             if (success == 0)
             {
                 if (use_tls)
                 {
                     ssl = SSL_new(ssl_ctx);
-                    SSL_set_fd(ssl, sockfd);
-                    SSL_connect(ssl);
+                    if (ssl != nullptr && !tls_host.empty())
+                    {
+                        X509_STORE *store = X509_STORE_new();
+                        in_addr ipv4{};
+                        in6_addr ipv6{};
+                        const bool ip_host = inet_pton(AF_INET, tls_host.c_str(), &ipv4) == 1 ||
+                                             inet_pton(AF_INET6, tls_host.c_str(), &ipv6) == 1;
+                        const bool configured = store != nullptr &&
+                            (tls_ca_file.empty() ? X509_STORE_set_default_paths(store) :
+                             X509_STORE_load_file(store, tls_ca_file.c_str())) == 1 &&
+                            SSL_set1_verify_cert_store(ssl, store) == 1 &&
+                            (ip_host ? X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), tls_host.c_str()) == 1 :
+                             (SSL_set1_host(ssl, tls_host.c_str()) == 1 &&
+                              SSL_set_tlsext_host_name(ssl, tls_host.c_str()) == 1));
+                        X509_STORE_free(store);
+                        if (!configured)
+                        {
+                            SSL_free(ssl); ssl = nullptr;
+                        }
+                        else SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
+                    }
+                    if (ssl == nullptr || SSL_set_fd(ssl, sockfd) != 1 ||
+                        ConnectTls(ssl, sockfd, tls_handshake_timeout_ms) != 1)
+                    {
+                        if (ssl != nullptr) { SSL_free(ssl); ssl = nullptr; }
+                        close(sockfd);
+                        sockfd = -1;
+                        continue;
+                    }
                 }
                 break; // Successfully connected
             }
@@ -144,8 +205,34 @@ public:
         io_timeout_ms = timeout_ms;
     }
 
+    // Bounds TCP establishment per resolved address; DNS and TLS handshake remain separate.
+    void SetConnectTimeout(int timeout_ms)
+    {
+        if (timeout_ms < 0)
+            throw std::invalid_argument("Connect timeout must be nonnegative");
+        connect_timeout_ms = timeout_ms;
+    }
+
+    // Bounds the TLS handshake after TCP connects; zero preserves blocking behavior.
+    void SetTlsHandshakeTimeout(int timeout_ms)
+    {
+        if (timeout_ms < 0)
+            throw std::invalid_argument("TLS handshake timeout must be nonnegative");
+        tls_handshake_timeout_ms = timeout_ms;
+    }
+
     ssize_t Send(const std::string &buf, int flags = 0)
     {
+        if (ssl != nullptr)
+        {
+            if (flags != 0)
+            {
+                throw std::invalid_argument("TLS Send does not support flags");
+            }
+            const size_t length = std::min(buf.size(),
+                                           static_cast<size_t>(std::numeric_limits<int>::max()));
+            return SSL_write(ssl, buf.data(), static_cast<int>(length));
+        }
         ssize_t bytes_sent = send(sockfd, buf.c_str(), buf.length(), flags);
         return bytes_sent;
     }
@@ -157,7 +244,28 @@ public:
             return "";
         }
         std::string buffer(max_length, '\0');
-        ssize_t bytes_received = recv(sockfd, &buffer[0], buffer.size(), flags);
+        ssize_t bytes_received;
+        if (ssl != nullptr)
+        {
+            const int length = static_cast<int>(std::min(
+                buffer.size(), static_cast<size_t>(std::numeric_limits<int>::max())));
+            if (flags == MSG_PEEK)
+            {
+                bytes_received = SSL_peek(ssl, buffer.data(), length);
+            }
+            else
+            {
+                if (flags != 0)
+                {
+                    throw std::invalid_argument("TLS Receive supports only MSG_PEEK");
+                }
+                bytes_received = SSL_read(ssl, buffer.data(), length);
+            }
+        }
+        else
+        {
+            bytes_received = recv(sockfd, buffer.data(), buffer.size(), flags);
+        }
         if (bytes_received > 0)
         {
             buffer.resize(bytes_received);
@@ -167,6 +275,69 @@ public:
     }
 static SSL_CTX *ssl_ctx;
 private:
+    static int ConnectTls(SSL *connection, int fd, int timeout_ms)
+    {
+        if (timeout_ms == 0) return SSL_connect(connection);
+        const int original_flags = fcntl(fd, F_GETFL);
+        if (original_flags == -1 || fcntl(fd, F_SETFL, original_flags | O_NONBLOCK) == -1)
+            return -1;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(timeout_ms);
+        int result = -1;
+        while (true)
+        {
+            result = SSL_connect(connection);
+            if (result == 1) break;
+            const int error = SSL_get_error(connection, result);
+            if (error != SSL_ERROR_WANT_READ && error != SSL_ERROR_WANT_WRITE) break;
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0) { errno = ETIMEDOUT; break; }
+            pollfd ready{fd, static_cast<short>(error == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT), 0};
+            const int polled = poll(&ready, 1, static_cast<int>(remaining));
+            if (polled == 0) { errno = ETIMEDOUT; break; }
+            if (polled < 0 && errno != EINTR) break;
+        }
+        const int saved_errno = errno;
+        if (fcntl(fd, F_SETFL, original_flags) == -1) return -1;
+        errno = saved_errno;
+        return result;
+    }
+    static int ConnectTcp(int fd, const sockaddr *address, socklen_t length, int timeout_ms)
+    {
+        if (timeout_ms == 0) return connect(fd, address, length);
+        const int original_flags = fcntl(fd, F_GETFL);
+        if (original_flags == -1 || fcntl(fd, F_SETFL, original_flags | O_NONBLOCK) == -1)
+            return -1;
+        int result = connect(fd, address, length);
+        if (result == -1 && errno == EINPROGRESS)
+        {
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
+            do
+            {
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+                if (remaining <= 0) { errno = ETIMEDOUT; result = -1; break; }
+                pollfd ready{fd, POLLOUT, 0};
+                result = poll(&ready, 1, static_cast<int>(remaining));
+            } while (result == -1 && errno == EINTR);
+            if (result > 0)
+            {
+                int socket_error = 0;
+                socklen_t error_length = sizeof(socket_error);
+                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_length) == -1)
+                    result = -1;
+                else if (socket_error != 0) { errno = socket_error; result = -1; }
+                else result = 0;
+            }
+            else if (result == 0) { errno = ETIMEDOUT; result = -1; }
+        }
+        const int saved_errno = errno;
+        if (fcntl(fd, F_SETFL, original_flags) == -1) return -1;
+        errno = saved_errno;
+        return result;
+    }
     static bool ApplyIoTimeout(int fd, int timeout_ms)
     {
         const struct timeval tv{timeout_ms / 1000, (timeout_ms % 1000) * 1000};
@@ -177,6 +348,10 @@ private:
     
     SSL *ssl = nullptr;
     int io_timeout_ms = 0;
+    int connect_timeout_ms = 0;
+    int tls_handshake_timeout_ms = 0;
+    std::string tls_host;
+    std::string tls_ca_file;
 };
 
 #endif // SOCKET_H
