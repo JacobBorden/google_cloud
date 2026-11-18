@@ -34,6 +34,78 @@ struct Fd {
       close(value);
   }
 };
+#ifdef TEST_WRAP_POLL
+struct ConnectPoll {
+  bool simulate_timeout;
+  int calls = 0;
+  int fd = -1;
+  int first_timeout = 0;
+  int retry_timeout = 0;
+  bool retried_same_fd = false;
+};
+thread_local ConnectPoll *connect_poll = nullptr;
+
+extern "C" int __real_poll(pollfd *, nfds_t, int);
+extern "C" int __wrap_poll(pollfd *fds, nfds_t count, int timeout) {
+  if (connect_poll != nullptr && count == 1 && fds[0].events == POLLOUT) {
+    auto &wait = *connect_poll;
+    if (++wait.calls == 1) {
+      wait.fd = fds[0].fd;
+      wait.first_timeout = timeout;
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      errno = EINTR;
+      return -1;
+    }
+    wait.retry_timeout = timeout;
+    wait.retried_same_fd = fds[0].fd == wait.fd;
+    if (wait.simulate_timeout) {
+      fds[0].revents = 0;
+      return 0;
+    }
+  }
+  return __real_poll(fds, count, timeout);
+}
+
+void CheckInterruptedConnect(bool simulate_timeout) {
+  const int count = Fds();
+  {
+    Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+    Check(listener.value >= 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+               sizeof(address)) == 0);
+    Check(listen(listener.value, 1) == 0);
+    socklen_t length = sizeof(address);
+    Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
+                      &length) == 0);
+    const auto port = std::to_string(ntohs(address.sin_port));
+
+    Socket client;
+    client.SetConnectTimeout(2000);
+    ConnectPoll wait{simulate_timeout};
+    connect_poll = &wait;
+    const int result = client.Connect("127.0.0.1", port, false);
+    connect_poll = nullptr;
+    Check(wait.calls == 2 && wait.retried_same_fd);
+    Check(wait.retry_timeout > 0 && wait.retry_timeout <= wait.first_timeout - 20);
+    if (simulate_timeout) {
+      Check(result == -1 && !client.isValid());
+      Check(Fds() == count + 1); // Only the listener remains open.
+    } else {
+      Check(result == 0 && client.isValid());
+      const int flags = fcntl(wait.fd, F_GETFL);
+      Check(flags >= 0 && (flags & O_NONBLOCK) == 0);
+      Fd peer{accept(listener.value, nullptr, nullptr)};
+      Check(peer.value >= 0 && client.Send("x") == 1);
+      char received = '\0';
+      Check(recv(peer.value, &received, 1, 0) == 1 && received == 'x');
+    }
+  }
+  Check(Fds() == count);
+}
+#endif
 volatile std::sig_atomic_t handshake_signals = 0;
 void MarkHandshakeSignal(int) { handshake_signals = 1; }
 int main(int argc, char **argv) {
@@ -223,6 +295,11 @@ int main(int argc, char **argv) {
         Check(rejected_negative);
       }
       Check(Fds() == count);
+#ifdef TEST_WRAP_POLL
+    } else if (group == "connect_interrupt") {
+      CheckInterruptedConnect(false);
+      CheckInterruptedConnect(true);
+#endif
     } else if (group == "tls_timeout") {
       struct sigaction action{};
       action.sa_handler = MarkHandshakeSignal;
