@@ -66,21 +66,61 @@ extern "C" int __wrap_poll(pollfd *fds, nfds_t count, int timeout) {
   return __real_poll(fds, count, timeout);
 }
 
+std::string ListenOnLoopback(const Fd &listener, int backlog) {
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+             sizeof(address)) == 0);
+  Check(listen(listener.value, backlog) == 0);
+  socklen_t length = sizeof(address);
+  Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
+                    &length) == 0);
+  return std::to_string(ntohs(address.sin_port));
+}
+
+void CheckConnectTimeout() {
+  using namespace std::chrono;
+  const int count = Fds();
+  {
+    Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+    Check(listener.value >= 0);
+    // Linux admits one pending connection with backlog zero. Keep it queued
+    // so the next connection cannot complete under the default overflow policy.
+    const auto port = ListenOnLoopback(listener, 0);
+    Socket queued;
+    queued.SetConnectTimeout(2000);
+    Check(queued.Connect("127.0.0.1", port, false) == 0);
+
+    Socket client;
+    constexpr auto timeout = milliseconds(150);
+    client.SetConnectTimeout(timeout.count());
+    const auto start = steady_clock::now();
+    const int result = client.Connect("127.0.0.1", port, false);
+    const auto elapsed = steady_clock::now() - start;
+    if (result != -1 || client.isValid() || elapsed < timeout - milliseconds(5) ||
+        elapsed >= seconds(2)) {
+      throw std::runtime_error("full loopback accept queue: connect returned " +
+                               std::to_string(result) + " after " +
+                               std::to_string(duration_cast<milliseconds>(elapsed).count()) +
+                               " ms (expected deadline at 150 ms)");
+    }
+    Check(Fds() == count + 2); // Only the listener and queued client remain open.
+
+    Fd peer{accept(listener.value, nullptr, nullptr)};
+    Check(peer.value >= 0);
+    client.SetConnectTimeout(2000);
+    Check(client.Connect("127.0.0.1", port, false) == 0 && client.isValid());
+  }
+  Check(Fds() == count);
+}
+
 void CheckInterruptedConnect(bool simulate_timeout) {
   const int count = Fds();
   {
     Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
     Check(listener.value >= 0);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
-               sizeof(address)) == 0);
-    Check(listen(listener.value, 1) == 0);
-    socklen_t length = sizeof(address);
-    Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
-                      &length) == 0);
-    const auto port = std::to_string(ntohs(address.sin_port));
+    const auto port = ListenOnLoopback(listener, 1);
 
     Socket client;
     client.SetConnectTimeout(2000);
@@ -299,6 +339,8 @@ int main(int argc, char **argv) {
     } else if (group == "connect_interrupt") {
       CheckInterruptedConnect(false);
       CheckInterruptedConnect(true);
+    } else if (group == "connect_timeout") {
+      CheckConnectTimeout();
 #endif
     } else if (group == "tls_timeout") {
       struct sigaction action{};

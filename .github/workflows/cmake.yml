@@ -34,6 +34,7 @@ jobs:
           valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests lifecycle
           valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests loopback
           valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests connect_interrupt
+          valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests connect_timeout
           valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests tls_failure
           valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests tls_timeout
           valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite ./build/socket_tests tls_io
