@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <dirent.h>
+#include <memory>
 #include <pthread.h>
 #include <stdexcept>
 #include <thread>
@@ -429,24 +430,24 @@ int main(int argc, char **argv) {
       socklen_t tls_length = sizeof(tls_address);
       Check(getsockname(tls_listener.value,
                         reinterpret_cast<sockaddr *>(&tls_address), &tls_length) == 0);
+      // Prepare the peer before starting the client's handshake deadline.
+      std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> context(
+          SSL_CTX_new(TLS_server_method()), SSL_CTX_free);
+      Check(context != nullptr);
+      const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+      const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+      Check(SSL_CTX_use_certificate_file(context.get(), cert.c_str(), SSL_FILETYPE_PEM) == 1);
+      Check(SSL_CTX_use_PrivateKey_file(context.get(), key.c_str(), SSL_FILETYPE_PEM) == 1);
+      std::unique_ptr<SSL, decltype(&SSL_free)> connection(SSL_new(context.get()), SSL_free);
+      Check(connection != nullptr);
       std::thread tls_peer([&] {
         Fd accepted{accept(tls_listener.value, nullptr, nullptr)};
         Check(accepted.value >= 0);
-        SSL_CTX *context = SSL_CTX_new(TLS_server_method());
-        Check(context != nullptr);
-        const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
-        const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
-        Check(SSL_CTX_use_certificate_file(context, cert.c_str(), SSL_FILETYPE_PEM) == 1);
-        Check(SSL_CTX_use_PrivateKey_file(context, key.c_str(), SSL_FILETYPE_PEM) == 1);
-        SSL *connection = SSL_new(context);
-        Check(connection != nullptr);
-        Check(SSL_set_fd(connection, accepted.value) == 1);
-        Check(SSL_accept(connection) == 1);
+        Check(SSL_set_fd(connection.get(), accepted.value) == 1);
+        Check(SSL_accept(connection.get()) == 1);
         char request[2];
-        Check(SSL_read(connection, request, sizeof(request)) == 2);
+        Check(SSL_read(connection.get(), request, sizeof(request)) == 2);
         Check(std::string(request, sizeof(request)) == "ok");
-        SSL_free(connection);
-        SSL_CTX_free(context);
       });
       Check(moved.Connect("127.0.0.1", std::to_string(ntohs(tls_address.sin_port)), true) == 0);
       Check(moved.Send("ok") == 2);
