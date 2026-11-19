@@ -36,7 +36,10 @@ struct Fd {
 };
 #ifdef TEST_WRAP_POLL
 struct ConnectPoll {
-  bool simulate_timeout;
+  bool simulate_timeout = false;
+  int timeout_limit_ms = 0;
+  bool within_timeout_limit = true;
+  int poll_result = -1;
   int calls = 0;
   int fd = -1;
   int first_timeout = 0;
@@ -49,6 +52,12 @@ extern "C" int __real_poll(pollfd *, nfds_t, int);
 extern "C" int __wrap_poll(pollfd *fds, nfds_t count, int timeout) {
   if (connect_poll != nullptr && count == 1 && fds[0].events == POLLOUT) {
     auto &wait = *connect_poll;
+    if (wait.timeout_limit_ms > 0) {
+      wait.within_timeout_limit =
+          wait.within_timeout_limit && timeout > 0 && timeout <= wait.timeout_limit_ms;
+      wait.poll_result = __real_poll(fds, count, timeout);
+      return wait.poll_result;
+    }
     if (++wait.calls == 1) {
       wait.fd = fds[0].fd;
       wait.first_timeout = timeout;
@@ -95,9 +104,15 @@ void CheckConnectTimeout() {
     Socket client;
     constexpr auto timeout = milliseconds(150);
     client.SetConnectTimeout(timeout.count());
+    ConnectPoll wait{.timeout_limit_ms = static_cast<int>(timeout.count())};
+    connect_poll = &wait;
     const auto start = steady_clock::now();
     const int result = client.Connect("127.0.0.1", port, false);
     const auto elapsed = steady_clock::now() - start;
+    connect_poll = nullptr;
+    if (!wait.within_timeout_limit || wait.poll_result != 0) {
+      throw std::runtime_error("expected a real TCP poll timeout within the configured wait budget");
+    }
     if (result != -1 || client.isValid() || elapsed < timeout - milliseconds(5) ||
         elapsed >= seconds(2)) {
       throw std::runtime_error("full loopback accept queue: connect returned " +
