@@ -42,6 +42,8 @@ struct ConnectPoll {
   bool within_timeout_limit = true;
   int poll_result = -1;
   int expired_waits = 0;
+  int socket_error_reads = 0;
+  int first_socket_error = 0;
   int calls = 0;
   int fd = -1;
   int first_timeout = 0;
@@ -79,13 +81,31 @@ extern "C" int __wrap_poll(pollfd *fds, nfds_t count, int timeout) {
   return __real_poll(fds, count, timeout);
 }
 
-std::string ListenOnLoopback(const Fd &listener, int backlog) {
+extern "C" int __real_getsockopt(int, int, int, void *, socklen_t *);
+extern "C" int __wrap_getsockopt(int fd, int level, int option, void *value,
+                                 socklen_t *length) {
+  const int result = __real_getsockopt(fd, level, option, value, length);
+  if (result == 0 && connect_poll != nullptr && level == SOL_SOCKET &&
+      option == SO_ERROR && *length == sizeof(int)) {
+    auto &wait = *connect_poll;
+    if (++wait.socket_error_reads == 1)
+      wait.first_socket_error = *static_cast<int *>(value);
+  }
+  return result;
+}
+
+void BindLoopback(const Fd &socket) {
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+  Check(bind(socket.value, reinterpret_cast<sockaddr *>(&address),
              sizeof(address)) == 0);
+}
+
+std::string ListenOnLoopback(const Fd &listener, int backlog) {
+  BindLoopback(listener);
   Check(listen(listener.value, backlog) == 0);
+  sockaddr_in address{};
   socklen_t length = sizeof(address);
   Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
                     &length) == 0);
@@ -114,7 +134,7 @@ extern "C" void __wrap_freeaddrinfo(addrinfo *addresses) {
   __real_freeaddrinfo(addresses);
 }
 
-void CheckConnectFallback(const Fd &full_listener, int timeout_ms) {
+void CheckConnectFallback(const Fd &first_endpoint, int timeout_ms, int first_error) {
   const int count = Fds();
   {
     Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
@@ -123,7 +143,7 @@ void CheckConnectFallback(const Fd &full_listener, int timeout_ms) {
 
     sockaddr_in endpoints[2]{};
     socklen_t length = sizeof(endpoints[0]);
-    Check(getsockname(full_listener.value, reinterpret_cast<sockaddr *>(&endpoints[0]),
+    Check(getsockname(first_endpoint.value, reinterpret_cast<sockaddr *>(&endpoints[0]),
                       &length) == 0);
     length = sizeof(endpoints[1]);
     Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&endpoints[1]),
@@ -146,9 +166,15 @@ void CheckConnectFallback(const Fd &full_listener, int timeout_ms) {
     const int result = client.Connect("127.0.0.1", "0", false);
     connect_poll = nullptr;
     const bool released_addresses = std::exchange(loopback_addresses, nullptr) == nullptr;
+    const bool first_attempt_failed = first_error == 0
+        ? wait.expired_waits == 1 && wait.socket_error_reads == 1
+        : wait.expired_waits == 0 && wait.socket_error_reads == 2 &&
+          wait.first_socket_error == first_error;
     if (result != 0 || !client.isValid() || !released_addresses ||
-        !wait.within_timeout_limit || wait.expired_waits != 1 || wait.poll_result <= 0) {
-      throw std::runtime_error("expected one TCP deadline followed by a successful address fallback");
+        !wait.within_timeout_limit || !first_attempt_failed || wait.poll_result <= 0) {
+      throw std::runtime_error(first_error == 0
+          ? "expected a TCP deadline followed by successful address fallback"
+          : "expected TCP refusal followed by successful address fallback");
     }
     Check(Fds() == count + 2); // Only the new listener and successful client were added.
 
@@ -194,7 +220,7 @@ void CheckConnectTimeout() {
     }
     Check(Fds() == count + 2); // Only the listener and queued client remain open.
 
-    CheckConnectFallback(listener, timeout.count());
+    CheckConnectFallback(listener, timeout.count(), 0);
 
     Fd peer{accept(listener.value, nullptr, nullptr)};
     Check(peer.value >= 0);
@@ -430,6 +456,11 @@ int main(int argc, char **argv) {
       CheckInterruptedConnect(true);
     } else if (group == "connect_timeout") {
       CheckConnectTimeout();
+      Fd bound_socket{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(bound_socket.value >= 0);
+      // Reserve the port without listening, so no other listener can take it.
+      BindLoopback(bound_socket);
+      CheckConnectFallback(bound_socket, 2000, ECONNREFUSED);
 #endif
     } else if (group == "tls_timeout") {
       struct sigaction action{};
