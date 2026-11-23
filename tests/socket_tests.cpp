@@ -43,6 +43,7 @@ struct ConnectPoll {
   int poll_result = -1;
   int expired_waits = 0;
   int socket_error_reads = 0;
+  int refused_attempts = 0;
   int first_socket_error = 0;
   int calls = 0;
   int fd = -1;
@@ -88,8 +89,11 @@ extern "C" int __wrap_getsockopt(int fd, int level, int option, void *value,
   if (result == 0 && connect_poll != nullptr && level == SOL_SOCKET &&
       option == SO_ERROR && *length == sizeof(int)) {
     auto &wait = *connect_poll;
+    const int socket_error = *static_cast<int *>(value);
     if (++wait.socket_error_reads == 1)
-      wait.first_socket_error = *static_cast<int *>(value);
+      wait.first_socket_error = socket_error;
+    if (socket_error == ECONNREFUSED)
+      ++wait.refused_attempts;
   }
   return result;
 }
@@ -102,14 +106,26 @@ void BindLoopback(const Fd &socket) {
              sizeof(address)) == 0);
 }
 
+sockaddr_in LoopbackAddress(const Fd &socket) {
+  sockaddr_in address{};
+  socklen_t length = sizeof(address);
+  Check(getsockname(socket.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+  return address;
+}
+
+addrinfo LoopbackAddrInfo(sockaddr_in &address) {
+  addrinfo entry{};
+  entry.ai_family = AF_INET;
+  entry.ai_socktype = SOCK_STREAM;
+  entry.ai_addrlen = sizeof(address);
+  entry.ai_addr = reinterpret_cast<sockaddr *>(&address);
+  return entry;
+}
+
 std::string ListenOnLoopback(const Fd &listener, int backlog) {
   BindLoopback(listener);
   Check(listen(listener.value, backlog) == 0);
-  sockaddr_in address{};
-  socklen_t length = sizeof(address);
-  Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
-                    &length) == 0);
-  return std::to_string(ntohs(address.sin_port));
+  return std::to_string(ntohs(LoopbackAddress(listener).sin_port));
 }
 
 // Inject only the address list. Both TCP attempts still use real sockets and poll.
@@ -141,21 +157,8 @@ void CheckConnectFallback(const Fd &first_endpoint, int timeout_ms, int first_er
     Check(listener.value >= 0);
     ListenOnLoopback(listener, 1);
 
-    sockaddr_in endpoints[2]{};
-    socklen_t length = sizeof(endpoints[0]);
-    Check(getsockname(first_endpoint.value, reinterpret_cast<sockaddr *>(&endpoints[0]),
-                      &length) == 0);
-    length = sizeof(endpoints[1]);
-    Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&endpoints[1]),
-                      &length) == 0);
-
-    addrinfo addresses[2]{};
-    for (int index = 0; index < 2; ++index) {
-      addresses[index].ai_family = AF_INET;
-      addresses[index].ai_socktype = SOCK_STREAM;
-      addresses[index].ai_addrlen = sizeof(endpoints[index]);
-      addresses[index].ai_addr = reinterpret_cast<sockaddr *>(&endpoints[index]);
-    }
+    sockaddr_in endpoints[2]{LoopbackAddress(first_endpoint), LoopbackAddress(listener)};
+    addrinfo addresses[2]{LoopbackAddrInfo(endpoints[0]), LoopbackAddrInfo(endpoints[1])};
     addresses[0].ai_next = &addresses[1];
 
     Socket client;
@@ -179,6 +182,45 @@ void CheckConnectFallback(const Fd &first_endpoint, int timeout_ms, int first_er
     Check(Fds() == count + 2); // Only the new listener and successful client were added.
 
     Fd peer{accept(listener.value, nullptr, nullptr)};
+    Check(peer.value >= 0 && client.Send("x") == 1);
+    char received = '\0';
+    Check(recv(peer.value, &received, 1, 0) == 1 && received == 'x');
+  }
+  Check(Fds() == count);
+}
+
+void CheckConnectExhaustion() {
+  const int count = Fds();
+  {
+    Fd first{socket(AF_INET, SOCK_STREAM, 0)};
+    Fd second{socket(AF_INET, SOCK_STREAM, 0)};
+    Check(first.value >= 0 && second.value >= 0);
+    BindLoopback(first);
+    BindLoopback(second);
+
+    sockaddr_in endpoints[2]{LoopbackAddress(first), LoopbackAddress(second)};
+    addrinfo addresses[2]{LoopbackAddrInfo(endpoints[0]), LoopbackAddrInfo(endpoints[1])};
+    addresses[0].ai_next = &addresses[1];
+
+    constexpr int timeout_ms = 2000;
+    Socket client;
+    client.SetConnectTimeout(timeout_ms);
+    ConnectPoll wait{.timeout_limit_ms = timeout_ms};
+    loopback_addresses = addresses;
+    connect_poll = &wait;
+    const int result = client.Connect("127.0.0.1", "0", false);
+    connect_poll = nullptr;
+    const bool released_addresses = std::exchange(loopback_addresses, nullptr) == nullptr;
+    if (result != -1 || client.isValid() || !released_addresses ||
+        wait.socket_error_reads != 2 || wait.refused_attempts != 2 ||
+        wait.expired_waits != 0 || !wait.within_timeout_limit || Fds() != count + 2) {
+      throw std::runtime_error("expected two refused TCP attempts and complete cleanup");
+    }
+
+    Check(listen(second.value, 1) == 0);
+    const auto port = std::to_string(ntohs(endpoints[1].sin_port));
+    Check(client.Connect("127.0.0.1", port, false) == 0 && client.isValid());
+    Fd peer{accept(second.value, nullptr, nullptr)};
     Check(peer.value >= 0 && client.Send("x") == 1);
     char received = '\0';
     Check(recv(peer.value, &received, 1, 0) == 1 && received == 'x');
@@ -461,6 +503,7 @@ int main(int argc, char **argv) {
       // Reserve the port without listening, so no other listener can take it.
       BindLoopback(bound_socket);
       CheckConnectFallback(bound_socket, 2000, ECONNREFUSED);
+      CheckConnectExhaustion();
 #endif
     } else if (group == "tls_timeout") {
       struct sigaction action{};
