@@ -713,16 +713,31 @@ int main(int argc, char **argv) {
         Check(SSL_read(connection, request, sizeof(request)) == 4);
         Check(std::string(request, sizeof(request)) == "ping");
         Check(SSL_write(connection, "pong", 4) == 4);
+        Check(SSL_read(connection, request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "next");
+        Check(SSL_write(connection, "done", 4) == 4);
         SSL_free(connection);
         SSL_CTX_free(context);
       });
       Socket client;
-      client.SetIoTimeout(1000);
-      Check(client.Connect("127.0.0.1",
-                           std::to_string(ntohs(address.sin_port)), true) == 0);
-      Check(client.Send("ping") == 4);
-      Check(client.Receive(MSG_PEEK, 4) == "pong");
-      Check(client.Receive(0, 4) == "pong");
+      {
+        Socket source;
+        source.SetIoTimeout(1000);
+        Check(source.Connect("127.0.0.1",
+                             std::to_string(ntohs(address.sin_port)), true) == 0);
+        Socket moved(std::move(source));
+        Check(!source.isValid() && moved.isValid());
+        Check(moved.Send("ping") == 4);
+        Check(moved.Receive(MSG_PEEK, 4) == "pong");
+        Check(moved.Receive(0, 4) == "pong");
+
+        const int before_assignment = Fds();
+        client = std::move(moved);
+        Check(!moved.isValid() && client.isValid());
+        Check(Fds() == before_assignment - 1);
+      }
+      Check(client.Send("next") == 4);
+      Check(client.Receive(0, 4) == "done");
       auto rejects_flags = [](auto action) {
         try {
           action();
