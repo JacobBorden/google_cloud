@@ -696,41 +696,59 @@ int main(int argc, char **argv) {
       socklen_t length = sizeof(address);
       Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
                         &length) == 0);
+      const std::string service = std::to_string(ntohs(address.sin_port));
       std::thread peer([&] {
-        Fd accepted{accept(listener.value, nullptr, nullptr)};
-        Check(accepted.value >= 0);
-        SSL_CTX *context = SSL_CTX_new(TLS_server_method());
+        std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> context(
+            SSL_CTX_new(TLS_server_method()), SSL_CTX_free);
         Check(context != nullptr);
         const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
         const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
-        Check(SSL_CTX_use_certificate_file(context, cert.c_str(), SSL_FILETYPE_PEM) == 1);
-        Check(SSL_CTX_use_PrivateKey_file(context, key.c_str(), SSL_FILETYPE_PEM) == 1);
-        SSL *connection = SSL_new(context);
-        Check(connection != nullptr);
-        Check(SSL_set_fd(connection, accepted.value) == 1);
-        Check(SSL_accept(connection) == 1);
+        Check(SSL_CTX_use_certificate_file(context.get(), cert.c_str(), SSL_FILETYPE_PEM) == 1);
+        Check(SSL_CTX_use_PrivateKey_file(context.get(), key.c_str(), SSL_FILETYPE_PEM) == 1);
+        auto accept_tls = [&](const Fd &accepted) {
+          Check(accepted.value >= 0);
+          std::unique_ptr<SSL, decltype(&SSL_free)> session(
+              SSL_new(context.get()), SSL_free);
+          Check(session != nullptr);
+          Check(SSL_set_fd(session.get(), accepted.value) == 1);
+          Check(SSL_accept(session.get()) == 1);
+          return session;
+        };
+
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        auto connection = accept_tls(accepted);
         char request[4];
-        Check(SSL_read(connection, request, sizeof(request)) == 4);
+        Check(SSL_read(connection.get(), request, sizeof(request)) == 4);
         Check(std::string(request, sizeof(request)) == "ping");
-        Check(SSL_write(connection, "pong", 4) == 4);
-        Check(SSL_read(connection, request, sizeof(request)) == 4);
+        Check(SSL_write(connection.get(), "pong", 4) == 4);
+
+        Fd replaced_fd{accept(listener.value, nullptr, nullptr)};
+        auto replaced = accept_tls(replaced_fd);
+        Check(SSL_read(replaced.get(), request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "old?");
+        Check(SSL_write(replaced.get(), "yes!", 4) == 4);
+
+        Check(SSL_read(connection.get(), request, sizeof(request)) == 4);
         Check(std::string(request, sizeof(request)) == "next");
-        Check(SSL_write(connection, "done", 4) == 4);
-        SSL_free(connection);
-        SSL_CTX_free(context);
+        Check(SSL_write(connection.get(), "done", 4) == 4);
       });
       Socket client;
       {
         Socket source;
         source.SetIoTimeout(1000);
-        Check(source.Connect("127.0.0.1",
-                             std::to_string(ntohs(address.sin_port)), true) == 0);
+        Check(source.Connect("127.0.0.1", service, true) == 0);
         Socket moved(std::move(source));
         Check(!source.isValid() && moved.isValid());
         Check(moved.Send("ping") == 4);
         Check(moved.Receive(MSG_PEEK, 4) == "pong");
         Check(moved.Receive(0, 4) == "pong");
 
+        client.SetIoTimeout(1000);
+        Check(client.Connect("127.0.0.1", service, true) == 0);
+        Check(client.Send("old?") == 4);
+        Check(client.Receive(0, 4) == "yes!");
+
+        // Both peer descriptors stay open until after this count.
         const int before_assignment = Fds();
         client = std::move(moved);
         Check(!moved.isValid() && client.isValid());
