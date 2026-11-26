@@ -731,6 +731,11 @@ int main(int argc, char **argv) {
         Check(SSL_read(connection.get(), request, sizeof(request)) == 4);
         Check(std::string(request, sizeof(request)) == "next");
         Check(SSL_write(connection.get(), "done", 4) == 4);
+
+        const timeval timeout{2, 0};
+        Check(setsockopt(accepted.value, SOL_SOCKET, SO_RCVTIMEO,
+                         &timeout, sizeof(timeout)) == 0);
+        Check(recv(accepted.value, request, sizeof(request), 0) == 0);
       });
       Socket client;
       {
@@ -766,8 +771,22 @@ int main(int argc, char **argv) {
       };
       Check(rejects_flags([&] { client.Send("x", MSG_DONTWAIT); }));
       Check(rejects_flags([&] { client.Receive(MSG_WAITALL); }));
+      // Reconnect the same live TLS client in plaintext mode.
+      Check(client.Connect("127.0.0.1", service, false) == 0);
       peer.join();
-      Check(Fds() == count + 2); // listener and connected client are still open
+      Check(Fds() == count + 2);
+      Fd plain_peer{accept(listener.value, nullptr, nullptr)};
+      Check(plain_peer.value >= 0);
+      const timeval timeout{2, 0};
+      Check(setsockopt(plain_peer.value, SOL_SOCKET, SO_RCVTIMEO,
+                       &timeout, sizeof(timeout)) == 0);
+      Check(client.Send("raw!") == 4);
+      char plaintext[4];
+      Check(recv(plain_peer.value, plaintext, sizeof(plaintext), MSG_WAITALL) == 4);
+      Check(std::string(plaintext, sizeof(plaintext)) == "raw!");
+      Check(send(plain_peer.value, "clear", 5, 0) == 5);
+      Check(shutdown(plain_peer.value, SHUT_WR) == 0);
+      Check(client.Receive(MSG_WAITALL, 5) == "clear");
     } else
       throw std::runtime_error("unknown group");
   } catch (const std::exception &e) {
