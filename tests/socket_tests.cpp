@@ -4,8 +4,13 @@
 #include <arpa/inet.h>
 #include <chrono>
 #include <cerrno>
+#include <csignal>
+#include <cstdlib>
 #include <dirent.h>
+#include <memory>
+#include <pthread.h>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 SSL_CTX *Socket::ssl_ctx = nullptr;
@@ -30,6 +35,276 @@ struct Fd {
       close(value);
   }
 };
+#ifdef TEST_WRAP_POLL
+struct ConnectPoll {
+  bool simulate_timeout = false;
+  int timeout_limit_ms = 0;
+  bool within_timeout_limit = true;
+  int poll_result = -1;
+  int expired_waits = 0;
+  int socket_error_reads = 0;
+  int refused_attempts = 0;
+  int first_socket_error = 0;
+  int calls = 0;
+  int fd = -1;
+  int first_timeout = 0;
+  int retry_timeout = 0;
+  bool retried_same_fd = false;
+};
+thread_local ConnectPoll *connect_poll = nullptr;
+
+extern "C" int __real_poll(pollfd *, nfds_t, int);
+extern "C" int __wrap_poll(pollfd *fds, nfds_t count, int timeout) {
+  if (connect_poll != nullptr && count == 1 && fds[0].events == POLLOUT) {
+    auto &wait = *connect_poll;
+    if (wait.timeout_limit_ms > 0) {
+      wait.within_timeout_limit =
+          wait.within_timeout_limit && timeout > 0 && timeout <= wait.timeout_limit_ms;
+      wait.poll_result = __real_poll(fds, count, timeout);
+      if (wait.poll_result == 0)
+        ++wait.expired_waits;
+      return wait.poll_result;
+    }
+    if (++wait.calls == 1) {
+      wait.fd = fds[0].fd;
+      wait.first_timeout = timeout;
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      errno = EINTR;
+      return -1;
+    }
+    wait.retry_timeout = timeout;
+    wait.retried_same_fd = fds[0].fd == wait.fd;
+    if (wait.simulate_timeout) {
+      fds[0].revents = 0;
+      return 0;
+    }
+  }
+  return __real_poll(fds, count, timeout);
+}
+
+extern "C" int __real_getsockopt(int, int, int, void *, socklen_t *);
+extern "C" int __wrap_getsockopt(int fd, int level, int option, void *value,
+                                 socklen_t *length) {
+  const int result = __real_getsockopt(fd, level, option, value, length);
+  if (result == 0 && connect_poll != nullptr && level == SOL_SOCKET &&
+      option == SO_ERROR && *length == sizeof(int)) {
+    auto &wait = *connect_poll;
+    const int socket_error = *static_cast<int *>(value);
+    if (++wait.socket_error_reads == 1)
+      wait.first_socket_error = socket_error;
+    if (socket_error == ECONNREFUSED)
+      ++wait.refused_attempts;
+  }
+  return result;
+}
+
+void BindLoopback(const Fd &socket) {
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  Check(bind(socket.value, reinterpret_cast<sockaddr *>(&address),
+             sizeof(address)) == 0);
+}
+
+sockaddr_in LoopbackAddress(const Fd &socket) {
+  sockaddr_in address{};
+  socklen_t length = sizeof(address);
+  Check(getsockname(socket.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+  return address;
+}
+
+addrinfo LoopbackAddrInfo(sockaddr_in &address) {
+  addrinfo entry{};
+  entry.ai_family = AF_INET;
+  entry.ai_socktype = SOCK_STREAM;
+  entry.ai_addrlen = sizeof(address);
+  entry.ai_addr = reinterpret_cast<sockaddr *>(&address);
+  return entry;
+}
+
+std::string ListenOnLoopback(const Fd &listener, int backlog) {
+  BindLoopback(listener);
+  Check(listen(listener.value, backlog) == 0);
+  return std::to_string(ntohs(LoopbackAddress(listener).sin_port));
+}
+
+// Inject only the address list. Both TCP attempts still use real sockets and poll.
+thread_local addrinfo *loopback_addresses = nullptr;
+
+extern "C" int __real_getaddrinfo(const char *, const char *, const addrinfo *, addrinfo **);
+extern "C" void __real_freeaddrinfo(addrinfo *);
+
+extern "C" int __wrap_getaddrinfo(const char *host, const char *service,
+                                  const addrinfo *hints, addrinfo **result) {
+  if (loopback_addresses == nullptr)
+    return __real_getaddrinfo(host, service, hints, result);
+  *result = loopback_addresses;
+  return 0;
+}
+
+extern "C" void __wrap_freeaddrinfo(addrinfo *addresses) {
+  if (addresses == loopback_addresses && addresses != nullptr) {
+    loopback_addresses = nullptr;
+    return;
+  }
+  __real_freeaddrinfo(addresses);
+}
+
+void CheckConnectFallback(const Fd &first_endpoint, int timeout_ms, int first_error) {
+  const int count = Fds();
+  {
+    Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+    Check(listener.value >= 0);
+    ListenOnLoopback(listener, 1);
+
+    sockaddr_in endpoints[2]{LoopbackAddress(first_endpoint), LoopbackAddress(listener)};
+    addrinfo addresses[2]{LoopbackAddrInfo(endpoints[0]), LoopbackAddrInfo(endpoints[1])};
+    addresses[0].ai_next = &addresses[1];
+
+    Socket client;
+    client.SetConnectTimeout(timeout_ms);
+    ConnectPoll wait{.timeout_limit_ms = timeout_ms};
+    loopback_addresses = addresses;
+    connect_poll = &wait;
+    const int result = client.Connect("127.0.0.1", "0", false);
+    connect_poll = nullptr;
+    const bool released_addresses = std::exchange(loopback_addresses, nullptr) == nullptr;
+    const bool first_attempt_failed = first_error == 0
+        ? wait.expired_waits == 1 && wait.socket_error_reads == 1
+        : wait.expired_waits == 0 && wait.socket_error_reads == 2 &&
+          wait.first_socket_error == first_error;
+    if (result != 0 || !client.isValid() || !released_addresses ||
+        !wait.within_timeout_limit || !first_attempt_failed || wait.poll_result <= 0) {
+      throw std::runtime_error(first_error == 0
+          ? "expected a TCP deadline followed by successful address fallback"
+          : "expected TCP refusal followed by successful address fallback");
+    }
+    Check(Fds() == count + 2); // Only the new listener and successful client were added.
+
+    Fd peer{accept(listener.value, nullptr, nullptr)};
+    Check(peer.value >= 0 && client.Send("x") == 1);
+    char received = '\0';
+    Check(recv(peer.value, &received, 1, 0) == 1 && received == 'x');
+  }
+  Check(Fds() == count);
+}
+
+void CheckConnectExhaustion() {
+  const int count = Fds();
+  {
+    Fd first{socket(AF_INET, SOCK_STREAM, 0)};
+    Fd second{socket(AF_INET, SOCK_STREAM, 0)};
+    Check(first.value >= 0 && second.value >= 0);
+    BindLoopback(first);
+    BindLoopback(second);
+
+    sockaddr_in endpoints[2]{LoopbackAddress(first), LoopbackAddress(second)};
+    addrinfo addresses[2]{LoopbackAddrInfo(endpoints[0]), LoopbackAddrInfo(endpoints[1])};
+    addresses[0].ai_next = &addresses[1];
+
+    constexpr int timeout_ms = 2000;
+    Socket client;
+    client.SetConnectTimeout(timeout_ms);
+    ConnectPoll wait{.timeout_limit_ms = timeout_ms};
+    loopback_addresses = addresses;
+    connect_poll = &wait;
+    const int result = client.Connect("127.0.0.1", "0", false);
+    connect_poll = nullptr;
+    const bool released_addresses = std::exchange(loopback_addresses, nullptr) == nullptr;
+    if (result != -1 || client.isValid() || !released_addresses ||
+        wait.socket_error_reads != 2 || wait.refused_attempts != 2 ||
+        wait.expired_waits != 0 || !wait.within_timeout_limit || Fds() != count + 2) {
+      throw std::runtime_error("expected two refused TCP attempts and complete cleanup");
+    }
+
+    Check(listen(second.value, 1) == 0);
+    const auto port = std::to_string(ntohs(endpoints[1].sin_port));
+    Check(client.Connect("127.0.0.1", port, false) == 0 && client.isValid());
+    Fd peer{accept(second.value, nullptr, nullptr)};
+    Check(peer.value >= 0 && client.Send("x") == 1);
+    char received = '\0';
+    Check(recv(peer.value, &received, 1, 0) == 1 && received == 'x');
+  }
+  Check(Fds() == count);
+}
+
+void CheckConnectTimeout() {
+  using namespace std::chrono;
+  const int count = Fds();
+  {
+    Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+    Check(listener.value >= 0);
+    // Linux admits one pending connection with backlog zero. Keep it queued
+    // so the next connection cannot complete under the default overflow policy.
+    const auto port = ListenOnLoopback(listener, 0);
+    Socket queued;
+    queued.SetConnectTimeout(2000);
+    Check(queued.Connect("127.0.0.1", port, false) == 0);
+
+    Socket client;
+    constexpr auto timeout = milliseconds(150);
+    client.SetConnectTimeout(timeout.count());
+    ConnectPoll wait{.timeout_limit_ms = static_cast<int>(timeout.count())};
+    connect_poll = &wait;
+    const auto start = steady_clock::now();
+    const int result = client.Connect("127.0.0.1", port, false);
+    const auto elapsed = steady_clock::now() - start;
+    connect_poll = nullptr;
+    if (!wait.within_timeout_limit || wait.poll_result != 0) {
+      throw std::runtime_error("expected a real TCP poll timeout within the configured wait budget");
+    }
+    if (result != -1 || client.isValid() || elapsed < timeout - milliseconds(5) ||
+        elapsed >= seconds(2)) {
+      throw std::runtime_error("full loopback accept queue: connect returned " +
+                               std::to_string(result) + " after " +
+                               std::to_string(duration_cast<milliseconds>(elapsed).count()) +
+                               " ms (expected deadline at 150 ms)");
+    }
+    Check(Fds() == count + 2); // Only the listener and queued client remain open.
+
+    CheckConnectFallback(listener, timeout.count(), 0);
+
+    Fd peer{accept(listener.value, nullptr, nullptr)};
+    Check(peer.value >= 0);
+    client.SetConnectTimeout(2000);
+    Check(client.Connect("127.0.0.1", port, false) == 0 && client.isValid());
+  }
+  Check(Fds() == count);
+}
+
+void CheckInterruptedConnect(bool simulate_timeout) {
+  const int count = Fds();
+  {
+    Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+    Check(listener.value >= 0);
+    const auto port = ListenOnLoopback(listener, 1);
+
+    Socket client;
+    client.SetConnectTimeout(2000);
+    ConnectPoll wait{simulate_timeout};
+    connect_poll = &wait;
+    const int result = client.Connect("127.0.0.1", port, false);
+    connect_poll = nullptr;
+    Check(wait.calls == 2 && wait.retried_same_fd);
+    Check(wait.retry_timeout > 0 && wait.retry_timeout <= wait.first_timeout - 20);
+    if (simulate_timeout) {
+      Check(result == -1 && !client.isValid());
+      Check(Fds() == count + 1); // Only the listener remains open.
+    } else {
+      Check(result == 0 && client.isValid());
+      const int flags = fcntl(wait.fd, F_GETFL);
+      Check(flags >= 0 && (flags & O_NONBLOCK) == 0);
+      Fd peer{accept(listener.value, nullptr, nullptr)};
+      Check(peer.value >= 0 && client.Send("x") == 1);
+      char received = '\0';
+      Check(recv(peer.value, &received, 1, 0) == 1 && received == 'x');
+    }
+  }
+  Check(Fds() == count);
+}
+#endif
+volatile std::sig_atomic_t handshake_signals = 0;
+void MarkHandshakeSignal(int) { handshake_signals = 1; }
 int main(int argc, char **argv) {
   int result = 0;
   try {
@@ -136,6 +411,7 @@ int main(int argc, char **argv) {
                           reinterpret_cast<sockaddr *>(&address),
                           &length) == 0);
         Socket client;
+        client.SetConnectTimeout(1000);
         Check(client.Connect("127.0.0.1",
                              std::to_string(ntohs(address.sin_port)), false) == 0);
         Fd peer{accept(listener.value, nullptr, nullptr)};
@@ -148,6 +424,26 @@ int main(int argc, char **argv) {
         Check(shutdown(peer.value, SHUT_WR) == 0);
         Check(client.Receive(0, 0).empty());
         Check(client.Receive(MSG_WAITALL) == "pong");
+      }
+      Check(Fds() == count);
+      {
+        Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+        Check(listener.value >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+        socklen_t length = sizeof(address);
+        Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+        Socket client;
+        client.SetConnectTimeout(100);
+        Socket moved(std::move(client));
+        Check(moved.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), false) != 0);
+        Check(!moved.isValid());
+        bool rejected = false;
+        try { moved.SetConnectTimeout(-1); }
+        catch (const std::invalid_argument &) { rejected = true; }
+        Check(rejected);
       }
       Check(Fds() == count);
       {
@@ -196,6 +492,317 @@ int main(int argc, char **argv) {
         Check(rejected_negative);
       }
       Check(Fds() == count);
+#ifdef TEST_WRAP_POLL
+    } else if (group == "connect_interrupt") {
+      CheckInterruptedConnect(false);
+      CheckInterruptedConnect(true);
+    } else if (group == "connect_timeout") {
+      CheckConnectTimeout();
+      Fd bound_socket{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(bound_socket.value >= 0);
+      // Reserve the port without listening, so no other listener can take it.
+      BindLoopback(bound_socket);
+      CheckConnectFallback(bound_socket, 2000, ECONNREFUSED);
+      CheckConnectExhaustion();
+#endif
+    } else if (group == "tls_timeout") {
+      struct sigaction action{};
+      action.sa_handler = MarkHandshakeSignal;
+      struct sigaction old_action{};
+      Check(sigaction(SIGUSR1, &action, &old_action) == 0);
+      const pthread_t client_thread = pthread_self();
+      const int count = Fds();
+      Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(listener.value >= 0);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+      Check(listen(listener.value, 1) == 0);
+      socklen_t length = sizeof(address);
+      Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+      std::thread peer([&] {
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        Check(accepted.value >= 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        Check(pthread_kill(client_thread, SIGUSR1) == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(375));
+      });
+      Socket client;
+      client.SetTlsHandshakeTimeout(100);
+      Socket moved(std::move(client));
+      const auto start = std::chrono::steady_clock::now();
+      const int connected = moved.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
+      const auto elapsed = std::chrono::steady_clock::now() - start;
+      Check(connected != 0 && !moved.isValid());
+      Check(elapsed >= std::chrono::milliseconds(75));
+      Check(elapsed < std::chrono::milliseconds(1500));
+      peer.join();
+      Check(sigaction(SIGUSR1, &old_action, nullptr) == 0);
+      Check(handshake_signals == 1);
+      Check(Fds() == count + 1);
+      Fd recovery_listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(recovery_listener.value >= 0);
+      sockaddr_in recovery_address{};
+      recovery_address.sin_family = AF_INET;
+      recovery_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(recovery_listener.value,
+                 reinterpret_cast<sockaddr *>(&recovery_address),
+                 sizeof(recovery_address)) == 0);
+      Check(listen(recovery_listener.value, 1) == 0);
+      socklen_t recovery_length = sizeof(recovery_address);
+      Check(getsockname(recovery_listener.value,
+                        reinterpret_cast<sockaddr *>(&recovery_address),
+                        &recovery_length) == 0);
+      Check(moved.Connect("127.0.0.1",
+                          std::to_string(ntohs(recovery_address.sin_port)), false) == 0);
+      Fd recovery_peer{accept(recovery_listener.value, nullptr, nullptr)};
+      Check(recovery_peer.value >= 0);
+      Check(moved.Send("ok") == 2);
+      char recovery_buffer[2];
+      Check(recv(recovery_peer.value, recovery_buffer, sizeof(recovery_buffer),
+                 MSG_WAITALL) == 2);
+      Check(std::string(recovery_buffer, sizeof(recovery_buffer)) == "ok");
+      Check(moved.isValid());
+      // A timed-out handshake must also leave the Socket reusable for TLS.
+      moved.SetTlsHandshakeTimeout(1000);
+      Fd tls_listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(tls_listener.value >= 0);
+      sockaddr_in tls_address{};
+      tls_address.sin_family = AF_INET;
+      tls_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(tls_listener.value, reinterpret_cast<sockaddr *>(&tls_address),
+                 sizeof(tls_address)) == 0);
+      Check(listen(tls_listener.value, 1) == 0);
+      socklen_t tls_length = sizeof(tls_address);
+      Check(getsockname(tls_listener.value,
+                        reinterpret_cast<sockaddr *>(&tls_address), &tls_length) == 0);
+      // Prepare the peer before starting the client's handshake deadline.
+      std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> context(
+          SSL_CTX_new(TLS_server_method()), SSL_CTX_free);
+      Check(context != nullptr);
+      const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+      const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+      Check(SSL_CTX_use_certificate_file(context.get(), cert.c_str(), SSL_FILETYPE_PEM) == 1);
+      Check(SSL_CTX_use_PrivateKey_file(context.get(), key.c_str(), SSL_FILETYPE_PEM) == 1);
+      std::unique_ptr<SSL, decltype(&SSL_free)> connection(SSL_new(context.get()), SSL_free);
+      Check(connection != nullptr);
+      std::thread tls_peer([&] {
+        Fd accepted{accept(tls_listener.value, nullptr, nullptr)};
+        Check(accepted.value >= 0);
+        Check(SSL_set_fd(connection.get(), accepted.value) == 1);
+        Check(SSL_accept(connection.get()) == 1);
+        char request[2];
+        Check(SSL_read(connection.get(), request, sizeof(request)) == 2);
+        Check(std::string(request, sizeof(request)) == "ok");
+      });
+      Check(moved.Connect("127.0.0.1", std::to_string(ntohs(tls_address.sin_port)), true) == 0);
+      Check(moved.Send("ok") == 2);
+      tls_peer.join();
+      Check(moved.isValid());
+      bool rejected = false;
+      try { client.SetTlsHandshakeTimeout(-1); }
+      catch (const std::invalid_argument &) { rejected = true; }
+      Check(rejected);
+    } else if (group == "tls_failure") {
+      const int count = Fds();
+      Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(listener.value >= 0);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+      Check(listen(listener.value, 1) == 0);
+      socklen_t length = sizeof(address);
+      Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
+                        &length) == 0);
+      std::thread peer([&] {
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        if (accepted.value >= 0)
+          send(accepted.value, "not TLS", 7, 0);
+      });
+      Socket client;
+      client.SetIoTimeout(1000);
+      const int result = client.Connect("127.0.0.1",
+                                        std::to_string(ntohs(address.sin_port)), true);
+      peer.join();
+      Check(result != 0);
+      Check(!client.isValid());
+      Check(Fds() == count + 1); // listener is still open
+    } else if (group == "tls_verify") {
+      const int count = Fds();
+      const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+      const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+      const std::string ca = std::string(TEST_SOURCE_DIR) + "/tests/ca.crt";
+      for (int case_index = 0; case_index < 8; ++case_index) {
+        Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+        Check(listener.value >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+        Check(listen(listener.value, 1) == 0);
+        socklen_t length = sizeof(address);
+        Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address), &length) == 0);
+        std::thread peer([&] {
+          Fd accepted{accept(listener.value, nullptr, nullptr)};
+          SSL_CTX *context = SSL_CTX_new(TLS_server_method());
+          const std::string server_cert = case_index == 6 ?
+              std::string(TEST_SOURCE_DIR) + "/tests/ip-server.crt" : cert;
+          const std::string server_key = case_index == 6 ?
+              std::string(TEST_SOURCE_DIR) + "/tests/ip-server.key" : key;
+          SSL_CTX_use_certificate_file(context, server_cert.c_str(), SSL_FILETYPE_PEM);
+          SSL_CTX_use_PrivateKey_file(context, server_key.c_str(), SSL_FILETYPE_PEM);
+          SSL *connection = SSL_new(context);
+          SSL_set_fd(connection, accepted.value);
+          SSL_accept(connection);
+          SSL_free(connection);
+          SSL_CTX_free(context);
+        });
+        Socket client;
+        client.SetIoTimeout(1000);
+        if (case_index == 6 || case_index == 7) {
+          client.SetTlsPeerVerification("127.0.0.1", case_index == 6 ?
+              std::string(TEST_SOURCE_DIR) + "/tests/ip-server.crt" : ca);
+        } else if (case_index >= 4) {
+          Check(setenv("SSL_CERT_FILE", case_index == 4 ? ca.c_str() :
+                       (ca + ".missing").c_str(), 1) == 0);
+          Check(setenv("SSL_CERT_DIR", (ca + ".missing").c_str(), 1) == 0);
+          client.SetTlsPeerVerification("localhost");
+        } else {
+          client.SetTlsPeerVerification(case_index == 1 ? "wrong.example" : "localhost",
+                                        case_index == 2 ? ca + ".missing" :
+                                        case_index == 3 ? cert : ca);
+        }
+        const int connected = client.Connect("127.0.0.1", std::to_string(ntohs(address.sin_port)), true);
+        peer.join();
+        Check((connected == 0) == (case_index == 0 || case_index == 4 || case_index == 6));
+        if (connected != 0) Check(!client.isValid());
+      }
+      Check(unsetenv("SSL_CERT_FILE") == 0);
+      Check(unsetenv("SSL_CERT_DIR") == 0);
+      Check(Fds() == count);
+    } else if (group == "tls_io") {
+      const int count = Fds();
+      Fd listener{socket(AF_INET, SOCK_STREAM, 0)};
+      Check(listener.value >= 0);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      Check(bind(listener.value, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+      Check(listen(listener.value, 1) == 0);
+      socklen_t length = sizeof(address);
+      Check(getsockname(listener.value, reinterpret_cast<sockaddr *>(&address),
+                        &length) == 0);
+      const std::string service = std::to_string(ntohs(address.sin_port));
+      std::thread peer([&] {
+        std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> context(
+            SSL_CTX_new(TLS_server_method()), SSL_CTX_free);
+        Check(context != nullptr);
+        const std::string cert = std::string(TEST_SOURCE_DIR) + "/tests/server.crt";
+        const std::string key = std::string(TEST_SOURCE_DIR) + "/tests/server.key";
+        Check(SSL_CTX_use_certificate_file(context.get(), cert.c_str(), SSL_FILETYPE_PEM) == 1);
+        Check(SSL_CTX_use_PrivateKey_file(context.get(), key.c_str(), SSL_FILETYPE_PEM) == 1);
+        auto accept_tls = [&](const Fd &accepted) {
+          Check(accepted.value >= 0);
+          std::unique_ptr<SSL, decltype(&SSL_free)> session(
+              SSL_new(context.get()), SSL_free);
+          Check(session != nullptr);
+          Check(SSL_set_fd(session.get(), accepted.value) == 1);
+          Check(SSL_accept(session.get()) == 1);
+          return session;
+        };
+
+        Fd accepted{accept(listener.value, nullptr, nullptr)};
+        auto connection = accept_tls(accepted);
+        char request[4];
+        Check(SSL_read(connection.get(), request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "ping");
+        Check(SSL_write(connection.get(), "pong", 4) == 4);
+
+        Fd replaced_fd{accept(listener.value, nullptr, nullptr)};
+        auto replaced = accept_tls(replaced_fd);
+        Check(SSL_read(replaced.get(), request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "old?");
+        Check(SSL_write(replaced.get(), "yes!", 4) == 4);
+
+        Check(SSL_read(connection.get(), request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "next");
+        Check(SSL_write(connection.get(), "done", 4) == 4);
+
+        const timeval timeout{2, 0};
+        Check(setsockopt(accepted.value, SOL_SOCKET, SO_RCVTIMEO,
+                         &timeout, sizeof(timeout)) == 0);
+        Check(recv(accepted.value, request, sizeof(request), 0) == 0);
+
+        Fd reconnected_fd{accept(listener.value, nullptr, nullptr)};
+        auto reconnected = accept_tls(reconnected_fd);
+        Check(SSL_read(reconnected.get(), request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "new?");
+        Check(SSL_write(reconnected.get(), "yes!", 4) == 4);
+
+        Check(setsockopt(reconnected_fd.value, SOL_SOCKET, SO_RCVTIMEO,
+                         &timeout, sizeof(timeout)) == 0);
+        Check(recv(reconnected_fd.value, request, sizeof(request), 0) == 0);
+      });
+      Socket client;
+      {
+        Socket source;
+        source.SetIoTimeout(1000);
+        Check(source.Connect("127.0.0.1", service, true) == 0);
+        Socket moved(std::move(source));
+        Check(!source.isValid() && moved.isValid());
+        Check(moved.Send("ping") == 4);
+        Check(moved.Receive(MSG_PEEK, 4) == "pong");
+        Check(moved.Receive(0, 4) == "pong");
+
+        client.SetIoTimeout(1000);
+        Check(client.Connect("127.0.0.1", service, true) == 0);
+        Check(client.Send("old?") == 4);
+        Check(client.Receive(0, 4) == "yes!");
+
+        // Both peer descriptors stay open until after this count.
+        const int before_assignment = Fds();
+        client = std::move(moved);
+        Check(!moved.isValid() && client.isValid());
+        Check(Fds() == before_assignment - 1);
+      }
+      Check(client.Send("next") == 4);
+      Check(client.Receive(0, 4) == "done");
+      auto rejects_flags = [](auto action) {
+        try {
+          action();
+        } catch (const std::invalid_argument &) {
+          return true;
+        }
+        return false;
+      };
+      Check(rejects_flags([&] { client.Send("x", MSG_DONTWAIT); }));
+      Check(rejects_flags([&] { client.Receive(MSG_WAITALL); }));
+
+      // Replace the live TLS session and exchange data over the new handshake.
+      Check(client.Connect("127.0.0.1", service, true) == 0);
+      Check(client.Send("new?") == 4);
+      Check(client.Receive(0, 4) == "yes!");
+
+      // Reconnect the same live TLS client in plaintext mode.
+      Check(client.Connect("127.0.0.1", service, false) == 0);
+      peer.join();
+      Check(Fds() == count + 2);
+      Fd plain_peer{accept(listener.value, nullptr, nullptr)};
+      Check(plain_peer.value >= 0);
+      const timeval timeout{2, 0};
+      Check(setsockopt(plain_peer.value, SOL_SOCKET, SO_RCVTIMEO,
+                       &timeout, sizeof(timeout)) == 0);
+      Check(client.Send("raw!") == 4);
+      char plaintext[4];
+      Check(recv(plain_peer.value, plaintext, sizeof(plaintext), MSG_WAITALL) == 4);
+      Check(std::string(plaintext, sizeof(plaintext)) == "raw!");
+      Check(send(plain_peer.value, "clear", 5, 0) == 5);
+      Check(shutdown(plain_peer.value, SHUT_WR) == 0);
+      Check(client.Receive(MSG_WAITALL, 5) == "clear");
     } else
       throw std::runtime_error("unknown group");
   } catch (const std::exception &e) {
