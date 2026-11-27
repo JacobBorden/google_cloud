@@ -736,6 +736,16 @@ int main(int argc, char **argv) {
         Check(setsockopt(accepted.value, SOL_SOCKET, SO_RCVTIMEO,
                          &timeout, sizeof(timeout)) == 0);
         Check(recv(accepted.value, request, sizeof(request), 0) == 0);
+
+        Fd reconnected_fd{accept(listener.value, nullptr, nullptr)};
+        auto reconnected = accept_tls(reconnected_fd);
+        Check(SSL_read(reconnected.get(), request, sizeof(request)) == 4);
+        Check(std::string(request, sizeof(request)) == "new?");
+        Check(SSL_write(reconnected.get(), "yes!", 4) == 4);
+
+        Check(setsockopt(reconnected_fd.value, SOL_SOCKET, SO_RCVTIMEO,
+                         &timeout, sizeof(timeout)) == 0);
+        Check(recv(reconnected_fd.value, request, sizeof(request), 0) == 0);
       });
       Socket client;
       {
@@ -771,6 +781,12 @@ int main(int argc, char **argv) {
       };
       Check(rejects_flags([&] { client.Send("x", MSG_DONTWAIT); }));
       Check(rejects_flags([&] { client.Receive(MSG_WAITALL); }));
+
+      // Replace the live TLS session and exchange data over the new handshake.
+      Check(client.Connect("127.0.0.1", service, true) == 0);
+      Check(client.Send("new?") == 4);
+      Check(client.Receive(0, 4) == "yes!");
+
       // Reconnect the same live TLS client in plaintext mode.
       Check(client.Connect("127.0.0.1", service, false) == 0);
       peer.join();
